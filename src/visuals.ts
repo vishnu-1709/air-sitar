@@ -52,7 +52,7 @@ export class LaserFX {
     this.vib.set(id, {
       amp: 0.006 + 0.022 * velocity,           // stage heights
       t0: now,
-      tau: 0.45 + 0.5 * bass,                  // s, like the amp decay
+      tau: 0.22 + 0.22 * bass,                 // s, matches the amp decay
       fv: 4 + 7 * (1 - bass),                  // visual wobble Hz (slowed way down from audio)
     });
     this.flash.set(id, { v: 0.5 + 0.5 * velocity, at });

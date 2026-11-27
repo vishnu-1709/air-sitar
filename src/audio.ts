@@ -28,7 +28,7 @@ const num = (k: string, d: number) => (q.has(k) ? Number(q.get(k)) : d);
 const DETUNE_CENTS = num('detune', 14); // supersaw spread (0 = no wobble/chorus)
 const SPREAD = 0.6;        // stereo pan of the outer saws
 const GLIDE_TIME = 0.03;   // s, how fast pitch follows length (smooths hand jitter)
-const AMP_DECAY = num('decay', 0.45);           // s (time constant) — "medium decay"
+const AMP_DECAY = num('decay', 0.2);            // s (time constant) — short pluck
 const AMP_DECAY_BASS = AMP_DECAY * 2;           // s — low notes ring longer
 const FILT_DECAY = 0.08;   // s — how fast the filter closes after the pluck ("pluck" sound)
 const FILT_Q = 5;          // resonance: a little peak = more synthy
