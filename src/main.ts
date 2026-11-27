@@ -1,4 +1,5 @@
 import './style.css';
+import { inject } from '@vercel/analytics';
 import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandTracker, LM, type Delegate } from './tracking';
 import { coverFit, toStage, type CoverFit } from './coords';
@@ -11,6 +12,9 @@ import { LaserFX, FLAGS, degreeColor, type Flag, type View } from './visuals';
 import { Groove } from './groove';
 import { Recorder, saveVideo } from './recorder';
 import { SCALES, DEFAULT_SCALE, SONG_SPREAD, songSlotPitch, freqToMidi, midiToFreq, snapWithHysteresis, nearestInScale, noteName, inScale, degreeOf } from './music';
+
+// Initialize Vercel Web Analytics
+inject();
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
