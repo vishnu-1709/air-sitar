@@ -56,6 +56,24 @@ export function pitchColor(m: number): string {
   return hsl(hue, 0.95, light);
 }
 
+/**
+ * Fixed, maximally distinct neon colours by scale degree (not pitch), so each
+ * note of the scale has its own colour in every octave. Thickness still comes
+ * from pitch, so octaves of the same note look different.
+ *   5 notes: magenta, violet, blue, cyan, lime
+ *   7 notes: magenta, violet, blue, cyan, green, lime, gold
+ */
+const DEGREE_HUES: Record<number, [number, number][]> = { // [hue°, lightness]
+  5: [[318, 0.6], [272, 0.64], [222, 0.62], [186, 0.58], [92, 0.62]],
+  7: [[320, 0.6], [278, 0.64], [232, 0.62], [192, 0.56], [148, 0.52], [95, 0.58], [48, 0.58]],
+};
+export function degreeColor(i: number, n: number): string {
+  const pal = DEGREE_HUES[n];
+  if (pal) { const [h, l] = pal[i % n]; return hsl(h, 1, l); }
+  // any other size: even spacing from magenta round to gold
+  return hsl(320 - (272 * i) / Math.max(1, n - 1), 1, 0.6);
+}
+
 export interface StringStyle {
   rgb: string;      // main colour
   hot: string;      // colour pushed toward white (core)
@@ -64,9 +82,9 @@ export interface StringStyle {
   flowSpeed: number;// px/s of the travelling dashes
 }
 
-export function styleFor(m: number, s: number): StringStyle {
+/** rgb: colour from degreeColor; everything else (width, texture, flow) from pitch */
+export function styleFor(m: number, s: number, rgb = pitchColor(m)): StringStyle {
   const t = pitch01(m);
-  const rgb = pitchColor(m);
   return {
     rgb,
     hot: mixWhite(rgb, 0.7),
@@ -86,6 +104,7 @@ export interface StringDraw {
   id: number;
   a: Pt; b: Pt;
   midi: number;
+  rgb: string;                 // note colour (by scale degree)
   len: number;                 // stage heights (for fret ticks)
   anchor: 'a' | 'b';           // fret ticks are measured from this end
   frets: number[];             // lengths (stage heights) where each semitone falls
@@ -138,7 +157,7 @@ export class LaserFX {
   flashOf(id: number) { return this.flash.get(id) ?? 0; }
 
   drawString(ctx: CanvasRenderingContext2D, v: View, d: StringDraw, now: number, dt: number) {
-    const st = styleFor(d.midi, v.s);
+    const st = styleFor(d.midi, v.s, d.rgb);
     const rgb = d.doomed ? '255, 60, 70' : st.rgb;
     const hot = d.doomed ? '255, 170, 170' : st.hot;
     const w = st.w;
@@ -290,10 +309,10 @@ export class LaserFX {
 
   /** Emitter: glowing ring with a gentle pulse; bigger/brighter when grabbable/grabbed */
   drawEmitter(
-    ctx: CanvasRenderingContext2D, v: View, p: Pt, midi: number,
+    ctx: CanvasRenderingContext2D, v: View, p: Pt, midi: number, colour: string,
     state: 'idle' | 'hover' | 'grabbed', now: number, id: number, doomed: boolean,
   ) {
-    const st = styleFor(midi, v.s);
+    const st = styleFor(midi, v.s, colour);
     const rgb = doomed ? '255, 60, 70' : st.rgb;
     const x = p.x * v.W, y = p.y * v.H;
     const pulse = 1 + 0.12 * Math.sin((2 * Math.PI * 1.2 * now) / 1000 + id);

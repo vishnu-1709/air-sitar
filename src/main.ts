@@ -7,9 +7,9 @@ import { StringField, MAX_STRINGS, type Str } from './strings';
 import { Plucker } from './pluck';
 import { Synth, freqForLength, K } from './audio';
 import { FX } from './fx';
-import { LaserFX, FLAGS, pitchColor, type Flag, type View } from './visuals';
+import { LaserFX, FLAGS, degreeColor, type Flag, type View } from './visuals';
 import { Groove } from './groove';
-import { SCALES, DEFAULT_SCALE, SONG_SPREAD, songSlotPitch, freqToMidi, midiToFreq, snapWithHysteresis, noteName, inScale } from './music';
+import { SCALES, DEFAULT_SCALE, SONG_SPREAD, songSlotPitch, freqToMidi, midiToFreq, snapWithHysteresis, nearestInScale, noteName, inScale, degreeOf } from './music';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -143,6 +143,12 @@ modeBtn.onclick = () => {
 SCALES.forEach((sc, i) => scaleSel.add(new Option(sc.name, String(i), i === scaleIdx, i === scaleIdx)));
 scaleSel.onchange = () => { scaleIdx = Number(scaleSel.value); };
 
+/** Colour of a note = its scale degree in the active scale (updates live as the note changes) */
+function noteColour(m: number): string {
+  const { i, n } = degreeOf(m, SCALES[scaleIdx]);
+  return degreeColor(i, n);
+}
+
 function pitchFor(str: Str): number {
   const raw = freqToMidi(freqForLength(field.length(str)));
   const m = mode === 'snap' ? snapWithHysteresis(raw, notes.get(str.id), SCALES[scaleIdx]) : raw;
@@ -217,7 +223,7 @@ function track() {
     const dl = Math.hypot(sb.x - sa.x, sb.y - sa.y) || 1;
     const bass = Math.min(1, Math.max(0, (60 - m) / 24));
     laser.pluck(ev.str.id, ev.pos, ev.at, { x: (sb.x - sa.x) / dl, y: (sb.y - sa.y) / dl },
-      velocity, bass, pitchColor(m), t0);
+      velocity, bass, noteColour(m), t0);
     pluckCount++;
     lastPluckInfo = `pluck #${pluckCount}: ${name} ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
   }
@@ -343,13 +349,14 @@ function drawStrings(fit: CoverFit, now: number, dt: number) {
     const m = notes.get(str.id) ?? 48;
     const held = field.heldEnd(str);
     laser.drawString(fctx, v, {
-      id: str.id, a: str.a, b: str.b, midi: m,
+      id: str.id, a: str.a, b: str.b, midi: m, rgb: noteColour(m),
       len: field.length(str),
       anchor: held === 'a' ? 'b' : 'a',   // ticks measured from the end you're NOT moving
       frets, scaleFret, doomed,
     }, now, dt);
-    laser.drawEmitter(fctx, v, str.a, m, field.endpointState(str, 'a', hands), now, str.id, doomed);
-    laser.drawEmitter(fctx, v, str.b, m, field.endpointState(str, 'b', hands), now, str.id, doomed);
+    const col = noteColour(m);
+    laser.drawEmitter(fctx, v, str.a, m, col, field.endpointState(str, 'a', hands), now, str.id, doomed);
+    laser.drawEmitter(fctx, v, str.b, m, col, field.endpointState(str, 'b', hands), now, str.id, doomed);
 
     // note name beside the left-hand emitter, pushed outward along the string
     const [p, q] = str.a.x <= str.b.x ? [str.a, str.b] : [str.b, str.a];
@@ -361,11 +368,12 @@ function drawStrings(fit: CoverFit, now: number, dt: number) {
   // preview while pulling a new string: dashed, in the colour of the note it will be
   const pv = field.preview;
   if (pv) {
-    const m = freqToMidi(freqForLength(Math.hypot((pv.b.x - pv.a.x) * aspect, pv.b.y - pv.a.y)));
+    const raw = freqToMidi(freqForLength(Math.hypot((pv.b.x - pv.a.x) * aspect, pv.b.y - pv.a.y)));
+    const m = mode === 'snap' ? nearestInScale(raw, scale) : raw; // the note it will become
     fctx.save();
     fctx.globalCompositeOperation = 'lighter';
     fctx.setLineDash([10 * v.s, 8 * v.s]);
-    fctx.strokeStyle = pv.ok ? `rgba(${pitchColor(m)}, 0.85)` : `rgba(${RED}, 0.6)`;
+    fctx.strokeStyle = pv.ok ? `rgba(${noteColour(m)}, 0.85)` : `rgba(${RED}, 0.6)`;
     fctx.lineWidth = 2 * v.s;
     fctx.beginPath();
     fctx.moveTo(pv.a.x * fit.W, pv.a.y * fit.H);

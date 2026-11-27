@@ -117,3 +117,26 @@ export function snapWithHysteresis(p: number, current: number | undefined, scale
 export function noteName(m: number): string {
   return NOTE_NAMES[((Math.round(m) % 12) + 12) % 12];
 }
+
+/**
+ * Scale degree of a note: which slot of the active scale it is (0 … n-1).
+ * Notes outside the scale (glide mode) use the nearest scale note.
+ * Song mode: position in the (sorted) song list. Pattern scales: position in
+ * the interval list, the same in every octave.
+ */
+export function degreeOf(m: number, scale: Scale): { i: number; n: number } {
+  if (scale.kind === 'song') {
+    const sorted = [...scale.notes].sort((a, b) => a - b);
+    let bi = 0;
+    sorted.forEach((x, i) => { if (Math.abs(x - m) < Math.abs(sorted[bi] - m)) bi = i; });
+    return { i: bi, n: sorted.length };
+  }
+  const root = NOTE_NAMES.indexOf(scale.root);
+  const pc = (((Math.round(m) - root) % 12) + 12) % 12;
+  let bi = 0, bd = 99;
+  scale.intervals.forEach((iv, i) => {
+    const d = Math.min(Math.abs(iv - pc), 12 - Math.abs(iv - pc)); // circular distance
+    if (d < bd) { bd = d; bi = i; }
+  });
+  return { i: bi, n: scale.intervals.length };
+}
