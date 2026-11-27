@@ -7,6 +7,7 @@ import { StringField, MAX_STRINGS, type Str } from './strings';
 import { Plucker } from './pluck';
 import { Synth, freqForLength } from './audio';
 import { FX } from './fx';
+import { LaserFX, pitchColor, type View } from './visuals';
 import { Groove } from './groove';
 import { SCALES, DEFAULT_SCALE, freqToMidi, midiToFreq, snapWithHysteresis, noteName } from './music';
 
@@ -101,7 +102,8 @@ let hands: Hand[] = [];   // smoothed, stage-normalized, mirrored
 let rawHands: Pt[][] = []; // unsmoothed, for the comparison overlay
 const field = new StringField();
 const plucker = new Plucker();
-const flashes = new Map<number, { v: number; at: Pt }>(); // string id → pluck flash (1 → 0)
+const laser = new LaserFX();
+let lastFrameT = performance.now();
 let lastPluckInfo = '';
 
 // --- Pitch mode & scale -----------------------------------------------------
@@ -190,14 +192,22 @@ function frame() {
     labels.set(ev.str.id, { text: name, v: 1 });
     const velocity = Math.min(1, (ev.speed - 0.15) / 2.5);
     synth?.pluck(ev.str.id, freq, velocity, ev.pos);
-    flashes.set(ev.str.id, { v: 0.4 + 0.6 * velocity, at: ev.at });
+    const sa = ev.str.a, sb = ev.str.b;
+    const dl = Math.hypot(sb.x - sa.x, sb.y - sa.y) || 1;
+    const bass = Math.min(1, Math.max(0, (60 - m) / 24));
+    laser.pluck(ev.str.id, ev.at, { x: (sb.x - sa.x) / dl, y: (sb.y - sa.y) / dl },
+      velocity, bass, pitchColor(m), t0);
     lastPluckInfo = `pluck: ${name} ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
   }
 
   // 2. Draw
+  const dt = Math.min(0.1, (t0 - lastFrameT) / 1000);
+  lastFrameT = t0;
+  laser.forget(new Set(field.strings.map((x) => x.id)));
   drawVideo(fit);
-  drawStrings(fit);
-  drawHands(fit);
+  drawHands(fit);      // hands under the lasers
+  drawStrings(fit, t0);
+  laser.drawSparks(ctx, view(fit), dt);
 
   // 3. Stats
   frames++;
@@ -233,7 +243,13 @@ function drawVideo(fit: CoverFit) {
   ctx.scale(-1, 1); // mirror
   ctx.drawImage(video, fit.ox, fit.oy, fit.dw, fit.dh);
   ctx.restore();
+  // darken the camera so the lasers pop (Phase 10: segmentation keeps you brighter than the room)
+  ctx.fillStyle = `rgba(4, 2, 12, ${CAMERA_DIM})`;
+  ctx.fillRect(0, 0, fit.W, fit.H);
 }
+
+const CAMERA_DIM = 0.55;
+const view = (fit: CoverFit): View => ({ W: fit.W, H: fit.H, s: fit.H / 720 });
 
 // Press "r" on the laptop to overlay the raw (unsmoothed) points in red
 let showRaw = false;
@@ -241,108 +257,54 @@ window.addEventListener('keydown', (e) => { if (e.key === 'r') showRaw = !showRa
 
 const BONES = HandLandmarker.HAND_CONNECTIONS;
 
-const AMBER = '255, 179, 71';
-const RED = '255, 90, 70';
+const RED = '255, 60, 70';
 
-function drawStrings(fit: CoverFit) {
-  const s = fit.H / 720;
-  ctx.lineCap = 'round';
-
+function drawStrings(fit: CoverFit, now: number) {
+  const v = view(fit);
   for (const str of field.strings) {
     const doomed = field.isHeld(str) && field.shouldDelete(str); // release now = delete
-    const fl = flashes.get(str.id);
-    const col = pitchColor(notes.get(str.id) ?? 48);
-    glowLine(str.a, str.b, fit, s, doomed ? RED : col, doomed ? 0.5 : 1 + (fl ? fl.v * 1.5 : 0));
-    drawLabel(str, fit, s);
-    if (fl) {
-      // small burst at the pluck point
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = `rgba(${AMBER}, ${0.5 * fl.v})`;
-      dot(fl.at.x * fit.W, fl.at.y * fit.H, (6 + 18 * (1 - fl.v)) * s);
-      ctx.globalCompositeOperation = 'source-over';
-      fl.v *= 0.88;
-      if (fl.v < 0.02) flashes.delete(str.id);
-    }
-    drawEndpoint(str, 'a', fit, s);
-    drawEndpoint(str, 'b', fit, s);
+    const col = doomed ? RED : pitchColor(notes.get(str.id) ?? 48);
+    laser.drawString(ctx, v, str.id, str.a, str.b, col, now, doomed ? 0.5 : 1);
+    laser.drawEmitter(ctx, v, str.a, col, field.endpointState(str, 'a', hands));
+    laser.drawEmitter(ctx, v, str.b, col, field.endpointState(str, 'b', hands));
+    drawLabel(str, fit, v.s);
   }
 
-  // preview while pulling a new string: dashed; red if it wouldn't be created
+  // preview while pulling a new string: dashed, in the colour of the note it will be
   const pv = field.preview;
   if (pv) {
-    ctx.setLineDash([10 * s, 8 * s]);
-    ctx.strokeStyle = pv.ok ? `rgba(${AMBER}, 0.8)` : `rgba(${RED}, 0.6)`;
-    ctx.lineWidth = 2 * s;
+    const m = freqToMidi(freqForLength(Math.hypot((pv.b.x - pv.a.x) * fit.W / fit.H, pv.b.y - pv.a.y)));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.setLineDash([10 * v.s, 8 * v.s]);
+    ctx.strokeStyle = pv.ok ? `rgba(${pitchColor(m)}, 0.85)` : `rgba(${RED}, 0.6)`;
+    ctx.lineWidth = 2 * v.s;
     ctx.beginPath();
     ctx.moveTo(pv.a.x * fit.W, pv.a.y * fit.H);
     ctx.lineTo(pv.b.x * fit.W, pv.b.y * fit.H);
     ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.restore();
   }
 }
 
-/** Pitch colour over the range C2–C5: deep magenta → violet → cyan → near-white */
-const PALETTE: [number, number, number][] = [
-  [200, 30, 160],  // C2 deep magenta
-  [140, 60, 255],  // violet
-  [40, 200, 255],  // cyan
-  [210, 250, 255], // C5 near-white
-];
-function pitchColor(m: number): string {
-  const t = Math.min(1, Math.max(0, (m - 36) / 36)) * (PALETTE.length - 1);
-  const i = Math.min(PALETTE.length - 2, Math.floor(t));
-  const f = t - i;
-  return PALETTE[i].map((c, k) => Math.round(c + (PALETTE[i + 1][k] - c) * f)).join(', ');
-}
-
-/** Note name that pops up beside the string's midpoint and fades */
+/** Note letter that fades in beside the string's midpoint after a pluck */
 function drawLabel(str: Str, fit: CoverFit, s: number) {
   const lb = labels.get(str.id);
   if (!lb) return;
   const mx = ((str.a.x + str.b.x) / 2) * fit.W;
   const my = ((str.a.y + str.b.y) / 2) * fit.H;
-  // offset perpendicular to the string, so the text doesn't sit on the line
+  // offset perpendicular to the string, so the text doesn't sit on the beam
   const dx = (str.b.x - str.a.x) * fit.W, dy = (str.b.y - str.a.y) * fit.H;
   const len = Math.hypot(dx, dy) || 1;
   let nx = -dy / len, ny = dx / len;
   if (ny > 0) { nx = -nx; ny = -ny; } // always above
-  ctx.font = `500 ${Math.round(20 * s)}px system-ui, sans-serif`;
+  ctx.font = `300 ${Math.round(15 * s)}px ui-monospace, "SF Mono", Menlo, monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = `rgba(255, 240, 220, ${lb.v})`;
-  ctx.fillText(lb.text, mx + nx * 26 * s, my + ny * 26 * s);
-  lb.v *= 0.97;
+  ctx.fillStyle = `rgba(230, 245, 255, ${0.8 * lb.v})`;
+  ctx.fillText(lb.text, mx + nx * 22 * s, my + ny * 22 * s);
+  lb.v *= 0.965;
   if (lb.v < 0.02) labels.delete(str.id);
-}
-
-/** Glow from layered strokes, wide+faint to thin+bright (no shadowBlur) */
-function glowLine(a: Pt, b: Pt, fit: CoverFit, s: number, rgb: string, alpha: number) {
-  const layers: [number, number][] = [[12, 0.05], [7, 0.1], [3.5, 0.3], [1.6, 1]];
-  ctx.globalCompositeOperation = 'lighter';
-  for (const [w, al] of layers) {
-    ctx.strokeStyle = `rgba(${rgb}, ${al * alpha})`;
-    ctx.lineWidth = w * s;
-    ctx.beginPath();
-    ctx.moveTo(a.x * fit.W, a.y * fit.H);
-    ctx.lineTo(b.x * fit.W, b.y * fit.H);
-    ctx.stroke();
-  }
-  ctx.globalCompositeOperation = 'source-over';
-}
-
-function drawEndpoint(str: Str, end: 'a' | 'b', fit: CoverFit, s: number) {
-  const state = field.endpointState(str, end, hands);
-  const p = str[end];
-  const x = p.x * fit.W, y = p.y * fit.H;
-  ctx.fillStyle = `rgba(${AMBER}, ${state === 'idle' ? 0.6 : 1})`;
-  dot(x, y, (state === 'grabbed' ? 5 : 3.5) * s);
-  if (state !== 'idle') {
-    ctx.strokeStyle = `rgba(${AMBER}, ${state === 'hover' ? 0.5 : 0.9})`;
-    ctx.lineWidth = 1.5 * s;
-    ctx.beginPath();
-    ctx.arc(x, y, (state === 'hover' ? 14 : 10) * s, 0, Math.PI * 2);
-    ctx.stroke();
-  }
 }
 
 // "c" on the laptop clears all strings (proper button comes in Phase 12)
@@ -356,15 +318,15 @@ function drawHands(fit: CoverFit) {
   }
 
   for (const h of hands) {
-    drawSkeleton(h.pts, fit, s, '#fff');
+    drawSkeleton(h.pts, fit, s, 'rgba(255,255,255,0.55)');
 
-    // pinch feedback: thumb + index tips turn amber and grow
+    // pinch feedback: thumb + index tips light up
     if (h.pinching) {
       for (const i of [LM.THUMB_TIP, LM.INDEX_TIP]) {
         ctx.fillStyle = 'rgba(0,0,0,0.35)';
         dot(h.pts[i].x * fit.W, h.pts[i].y * fit.H, 7 * s);
-        ctx.fillStyle = '#ffb347';
-        dot(h.pts[i].x * fit.W, h.pts[i].y * fit.H, 5.5 * s);
+        ctx.fillStyle = '#7fe8ff';
+        dot(h.pts[i].x * fit.W, h.pts[i].y * fit.H, 5 * s);
       }
     }
   }
@@ -403,7 +365,12 @@ function dot(x: number, y: number, r: number) {
   ctx.fill();
 }
 
+// Debug box: hidden unless ?debug in the URL; "d" toggles it on the laptop
+let showDebug = new URLSearchParams(location.search).has('debug');
+window.addEventListener('keydown', (e) => { if (e.key === 'd') { showDebug = !showDebug; updateDebug(); } });
+
 function updateDebug() {
+  if (!showDebug) { debug.textContent = ''; return; }
   const a = audioCtx!;
   debug.textContent = [
     `pinch: enter < ${PINCH_ENTER}, exit > ${PINCH_EXIT}   smooth: mc ${SMOOTH_MIN_CUTOFF} b ${SMOOTH_BETA}`,
