@@ -3,6 +3,7 @@ import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandTracker, type Delegate } from './tracking';
 import { coverFit, toStage, type CoverFit } from './coords';
 import { HandSet, PINCH_ENTER, PINCH_EXIT, type Hand, type Pt } from './hands';
+import { StringField, MAX_STRINGS, type Str } from './strings';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -75,6 +76,7 @@ startBtn.addEventListener('click', async () => {
 const handSet = new HandSet();
 let hands: Hand[] = [];   // smoothed, stage-normalized, mirrored
 let rawHands: Pt[][] = []; // unsmoothed, for the comparison overlay
+const field = new StringField();
 let frames = 0;
 let fps = 0;
 let detectMs = 0;
@@ -113,9 +115,11 @@ function frame() {
   }));
   rawHands = dets.map((d) => d.pts);
   hands = handSet.update(dets, t0, fit.W / fit.H);
+  field.update(hands, fit.W / fit.H);
 
   // 2. Draw
   drawVideo(fit);
+  drawStrings(fit);
   drawHands(fit);
 
   // 3. Stats
@@ -160,6 +164,67 @@ window.addEventListener('keydown', (e) => { if (e.key === 'r') showRaw = !showRa
 
 const BONES = HandLandmarker.HAND_CONNECTIONS;
 
+const AMBER = '255, 179, 71';
+const RED = '255, 90, 70';
+
+function drawStrings(fit: CoverFit) {
+  const s = fit.H / 720;
+  ctx.lineCap = 'round';
+
+  for (const str of field.strings) {
+    const doomed = field.isHeld(str) && field.shouldDelete(str); // release now = delete
+    glowLine(str.a, str.b, fit, s, doomed ? RED : AMBER, doomed ? 0.5 : 1);
+    drawEndpoint(str, 'a', fit, s);
+    drawEndpoint(str, 'b', fit, s);
+  }
+
+  // preview while pulling a new string: dashed; red if it wouldn't be created
+  const pv = field.preview;
+  if (pv) {
+    ctx.setLineDash([10 * s, 8 * s]);
+    ctx.strokeStyle = pv.ok ? `rgba(${AMBER}, 0.8)` : `rgba(${RED}, 0.6)`;
+    ctx.lineWidth = 2 * s;
+    ctx.beginPath();
+    ctx.moveTo(pv.a.x * fit.W, pv.a.y * fit.H);
+    ctx.lineTo(pv.b.x * fit.W, pv.b.y * fit.H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+/** Glow from layered strokes, wide+faint to thin+bright (no shadowBlur) */
+function glowLine(a: Pt, b: Pt, fit: CoverFit, s: number, rgb: string, alpha: number) {
+  const layers: [number, number][] = [[12, 0.05], [7, 0.1], [3.5, 0.3], [1.6, 1]];
+  ctx.globalCompositeOperation = 'lighter';
+  for (const [w, al] of layers) {
+    ctx.strokeStyle = `rgba(${rgb}, ${al * alpha})`;
+    ctx.lineWidth = w * s;
+    ctx.beginPath();
+    ctx.moveTo(a.x * fit.W, a.y * fit.H);
+    ctx.lineTo(b.x * fit.W, b.y * fit.H);
+    ctx.stroke();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawEndpoint(str: Str, end: 'a' | 'b', fit: CoverFit, s: number) {
+  const state = field.endpointState(str, end, hands);
+  const p = str[end];
+  const x = p.x * fit.W, y = p.y * fit.H;
+  ctx.fillStyle = `rgba(${AMBER}, ${state === 'idle' ? 0.6 : 1})`;
+  dot(x, y, (state === 'grabbed' ? 5 : 3.5) * s);
+  if (state !== 'idle') {
+    ctx.strokeStyle = `rgba(${AMBER}, ${state === 'hover' ? 0.5 : 0.9})`;
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath();
+    ctx.arc(x, y, (state === 'hover' ? 14 : 10) * s, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+// "c" on the laptop clears all strings (proper button comes in Phase 12)
+window.addEventListener('keydown', (e) => { if (e.key === 'c') field.clear(); });
+
 function drawHands(fit: CoverFit) {
   const s = fit.H / 720; // scale sizes with resolution
 
@@ -169,15 +234,6 @@ function drawHands(fit: CoverFit) {
 
   for (const h of hands) {
     drawSkeleton(h.pts, fit, s, '#fff');
-
-    // debug: ring at the grab point while pinching
-    if (h.pinching) {
-      ctx.strokeStyle = '#ffb347';
-      ctx.lineWidth = 2 * s;
-      ctx.beginPath();
-      ctx.arc(h.pinchPoint.x * fit.W, h.pinchPoint.y * fit.H, 12 * s, 0, Math.PI * 2);
-      ctx.stroke();
-    }
   }
 }
 
@@ -218,6 +274,7 @@ function updateDebug() {
   const a = audioCtx!;
   debug.textContent = [
     `pinch: enter < ${PINCH_ENTER}, exit > ${PINCH_EXIT}`,
+    `strings: ${field.strings.length}/${MAX_STRINGS}`,
     `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
     ...hands.map((h) =>
       `hand ${h.id}: ratio ${h.pinchRatio.toFixed(2)} ${h.pinching ? 'PINCH' : ''}`),
