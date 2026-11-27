@@ -12,7 +12,7 @@ const q = new URLSearchParams(location.search);
 export const PINCH_ENTER = Number(q.get('pe')) || 0.4;
 export const PINCH_EXIT = Number(q.get('px')) || 0.5;
 /** While holding a string, letting go needs a clearer finger opening (fast moves blur the fingers) */
-export const PINCH_EXIT_HOLD = Number(q.get('ph')) || 0.65;
+export const PINCH_EXIT_HOLD = Number(q.get('ph')) || 0.6;
 
 /** Keep a lost hand this long, so short tracking dropouts don't reset it */
 export const LOST_MS = 400;
@@ -31,7 +31,7 @@ export interface Hand {
   pinchCount: number;     // frames rawPinch has disagreed with pinching
   pinchRatio: number;    // raw ratio, for debugging/tuning
   pinchPoint: Pt;        // live midpoint of thumb & index tips
-  grabPoint: Pt;         // pinchPoint, frozen while the fingers are opening (no release jump)
+  anchor: Pt;            // thumb + index knuckles: stays put when the fingers open
   lastSeen: number;
   filters: OneEuro[];    // 21 × (x, y)
 }
@@ -95,7 +95,7 @@ export class HandSet {
       pinchCount: 0,
       pinchRatio: 1,
       pinchPoint: { x: 0, y: 0 },
-      grabPoint: { x: 0, y: 0 },
+      anchor: { x: 0, y: 0 },
       lastSeen: 0,
       filters: Array.from({ length: 42 }, () => new OneEuro()),
     };
@@ -112,17 +112,17 @@ export class HandSet {
     h.visible = true;
     h.lastSeen = nowMs;
 
-    // 2. Pinch ratio, measured two ways; take the smaller.
-    //    3D (world landmarks) handles hand rotation, but its depth guess is noisy
-    //    and can make a real pinch look open. 2D (screen) has no depth noise.
-    //    Either one saying "closed" is good evidence.
+    // 2. Pinch ratio, measured two ways and averaged.
+    //    3D (world landmarks) handles hand rotation but its depth guess is noisy;
+    //    2D (screen) has no depth noise but says "closed" when fingers overlap
+    //    edge-on. The average is steadier than either.
     const w = det.world;
     const r3 = dist3(w[LM.THUMB_TIP], w[LM.INDEX_TIP]) /
       Math.max(dist3(w[LM.WRIST], w[LM.MIDDLE_MCP]), 1e-6);
     const P = h.pts;
     const r2 = dist(P[LM.THUMB_TIP], P[LM.INDEX_TIP], aspect) /
       Math.max(dist(P[LM.WRIST], P[LM.MIDDLE_MCP], aspect), 1e-6);
-    h.pinchRatio = Math.min(r2, r3);
+    h.pinchRatio = (r2 + r3) / 2;
     const exit = holding ? PINCH_EXIT_HOLD : PINCH_EXIT;
 
     // 3. Hysteresis: different thresholds for entering and leaving,
@@ -145,9 +145,9 @@ export class HandSet {
     const a = h.pts[LM.THUMB_TIP];
     const b = h.pts[LM.INDEX_TIP];
     h.pinchPoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    // Fingers closed → grab point tracks the pinch. Fingers opening → freeze it,
-    // so the endpoint doesn't drift during the debounce frames before release.
-    if (h.rawPinch || !h.pinching) h.grabPoint = h.pinchPoint;
+    const k1 = h.pts[LM.THUMB_MCP];
+    const k2 = h.pts[LM.INDEX_MCP];
+    h.anchor = { x: (k1.x + k2.x) / 2, y: (k1.y + k2.y) / 2 };
   }
 }
 

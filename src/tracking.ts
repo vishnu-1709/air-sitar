@@ -33,6 +33,7 @@ export async function createHandTracker(): Promise<{ landmarker: HandLandmarker;
 /** MediaPipe landmark indices we care about */
 export const LM = {
   WRIST: 0,
+  THUMB_MCP: 2,
   THUMB_TIP: 4,
   INDEX_MCP: 5,
   INDEX_TIP: 8,

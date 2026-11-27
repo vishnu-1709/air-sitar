@@ -3,7 +3,7 @@ import { dist, LOST_MS, type Hand, type Pt } from './hands';
 // All lengths/radii in "stage heights" (aspect-corrected), see hands.ts dist()
 export const MAX_STRINGS = 6;
 export const MIN_LEN = 0.12;   // shorter than this → not created / deleted on release
-export const GRAB_R = 0.11;    // pinch this close to an endpoint to grab it
+export const GRAB_R = 0.08;    // pinch this close to an endpoint to grab it
 export const EDGE = 0.03;      // release an endpoint within this of the stage edge → delete
 
 export interface Str { id: number; a: Pt; b: Pt }
@@ -18,7 +18,8 @@ type Role =
 interface HandState {
   role: Role;
   wasPinching: boolean;
-  pt: Pt;         // this hand's grab point (see Hand.grabPoint)
+  pt: Pt;         // this hand's hold point
+  anchorOff: Pt | null; // pinch point relative to the knuckles, fixed at pinch start
   lastSeen: number;
 }
 
@@ -45,14 +46,22 @@ export class StringField {
       seen.add(h.id);
       let st = this.states.get(h.id);
       if (!st) {
-        st = { role: { kind: 'none' }, wasPinching: false, pt: h.grabPoint, lastSeen: nowMs };
+        st = { role: { kind: 'none' }, wasPinching: false, pt: h.pinchPoint, anchorOff: null, lastSeen: nowMs };
         this.states.set(h.id, st);
       }
       st.lastSeen = nowMs;
-      st.pt = h.grabPoint;
+      // While pinching, the hold point rides on the knuckles, not the fingertips.
+      // Opening the fingers to let go moves the fingertips, not the knuckles,
+      // so the string is released exactly where it was held: no jump.
+      if (h.pinching && !st.wasPinching) {
+        st.anchorOff = { x: h.pinchPoint.x - h.anchor.x, y: h.pinchPoint.y - h.anchor.y };
+      }
+      st.pt = st.anchorOff
+        ? { x: h.anchor.x + st.anchorOff.x, y: h.anchor.y + st.anchorOff.y }
+        : h.pinchPoint;
 
-      if (h.pinching && !st.wasPinching) this.onPinchStart(st, h.grabPoint);
-      else if (!h.pinching && st.wasPinching) this.onRelease(st);
+      if (h.pinching && !st.wasPinching) this.onPinchStart(st, st.pt);
+      else if (!h.pinching && st.wasPinching) { this.onRelease(st); st.anchorOff = null; }
       st.wasPinching = h.pinching;
     }
 
@@ -171,7 +180,7 @@ export class StringField {
     if (this.isGrabbed(s, end)) return 'grabbed';
     for (const h of hands) {
       const st = this.states.get(h.id);
-      if (st && st.role.kind === 'none' && dist(h.grabPoint, s[end], this.aspect) < GRAB_R) {
+      if (st && st.role.kind === 'none' && dist(h.pinchPoint, s[end], this.aspect) < GRAB_R) {
         return 'hover';
       }
     }
