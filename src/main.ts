@@ -6,6 +6,8 @@ import { HandSet, PINCH_ENTER, PINCH_EXIT, SMOOTH_BETA, SMOOTH_MIN_CUTOFF, type 
 import { StringField, MAX_STRINGS, type Str } from './strings';
 import { Plucker } from './pluck';
 import { Synth, freqForLength } from './audio';
+import { FX } from './fx';
+import { Groove } from './groove';
 import { SCALES, DEFAULT_SCALE, freqToMidi, midiToFreq, snapWithHysteresis, noteName } from './music';
 
 const startEl  = document.getElementById('start')!;
@@ -18,6 +20,7 @@ const debug    = document.getElementById('debug')!;
 
 let audioCtx: AudioContext | null = null;
 let synth: Synth | null = null;
+let groove: Groove | null = null;
 let landmarker: HandLandmarker | null = null;
 let delegate: Delegate = 'GPU';
 
@@ -41,7 +44,11 @@ startBtn.addEventListener('click', async () => {
   if (nav.audioSession) nav.audioSession.type = 'playback';
   audioCtx = new AudioContext({ latencyHint: 'interactive' });
   const resumed = audioCtx.resume();
-  synth = new Synth(audioCtx);
+  // synth → effects → speakers; beat → effects' dry path
+  const fx = new FX(audioCtx);
+  fx.output.connect(audioCtx.destination);
+  synth = new Synth(audioCtx, fx.input);
+  groove = new Groove(audioCtx, fx.dry);
   blip(audioCtx);
 
   // --- Camera ---
@@ -109,6 +116,11 @@ const labels = new Map<number, { text: string; v: number }>(); // note name that
 const controls = document.getElementById('controls')!;
 const modeBtn  = document.getElementById('modeBtn') as HTMLButtonElement;
 const scaleBtn = document.getElementById('scaleBtn') as HTMLButtonElement;
+const beatBtn  = document.getElementById('beatBtn') as HTMLButtonElement;
+beatBtn.onclick = () => {
+  groove?.toggle();
+  beatBtn.textContent = groove?.playing ? 'Beat ■' : 'Beat ▶';
+};
 modeBtn.onclick = () => {
   mode = mode === 'snap' ? 'glide' : 'snap';
   modeBtn.textContent = mode === 'snap' ? 'Snap' : 'Glide';
