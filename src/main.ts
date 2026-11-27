@@ -1,6 +1,6 @@
 import './style.css';
 import type { HandLandmarker, NormalizedLandmark } from '@mediapipe/tasks-vision';
-import { createHandTracker, FINGERTIPS, LM, type Delegate } from './tracking';
+import { createHandTracker, FINGERTIPS, type Delegate } from './tracking';
 import { coverFit, toStage, type CoverFit } from './coords';
 
 const startEl  = document.getElementById('start')!;
@@ -148,25 +148,33 @@ function drawVideo(fit: CoverFit) {
   ctx.restore();
 }
 
-const HAND_COLORS = ['#ffb347', '#7fd4c1']; // debug only
+// Press "d" on the laptop to show the raw joints (debug)
+let showJoints = false;
+window.addEventListener('keydown', (e) => { if (e.key === 'd') showJoints = !showJoints; });
+
+const GLOW = '255, 179, 71'; // warm amber (r, g, b)
 
 function drawHands(fit: CoverFit) {
-  const s = fit.H / 720; // scale dot sizes with resolution
-  hands.forEach((pts, h) => {
-    ctx.fillStyle = HAND_COLORS[h % 2];
+  const s = fit.H / 720; // scale sizes with resolution
+  ctx.globalCompositeOperation = 'lighter'; // overlapping light adds up, like real glow
 
-    // all 21 joints, faint
-    ctx.globalAlpha = 0.35;
-    for (const p of pts) dot(p.x * fit.W, p.y * fit.H, 3 * s);
-
-    // fingertips, bright; thumb + index bigger (they'll do the pinching)
-    ctx.globalAlpha = 1;
-    for (const i of FINGERTIPS) {
-      const r = i === LM.THUMB_TIP || i === LM.INDEX_TIP ? 9 : 5;
-      dot(pts[i].x * fit.W, pts[i].y * fit.H, r * s);
+  for (const pts of hands) {
+    if (showJoints) {
+      ctx.fillStyle = `rgba(${GLOW}, 0.3)`;
+      for (const p of pts) dot(p.x * fit.W, p.y * fit.H, 2.5 * s);
     }
-  });
-  ctx.globalAlpha = 1;
+    for (const i of FINGERTIPS) glow(pts[i].x * fit.W, pts[i].y * fit.H, 6 * s);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/** Soft glow from layered circles with falling alpha (cheap; no shadowBlur) */
+function glow(x: number, y: number, r: number) {
+  const layers: [number, number][] = [ [4, 0.05], [2.6, 0.1], [1.6, 0.22], [1, 0.9] ];
+  for (const [k, a] of layers) {
+    ctx.fillStyle = `rgba(${GLOW}, ${a})`;
+    dot(x, y, r * k);
+  }
 }
 
 function dot(x: number, y: number, r: number) {
