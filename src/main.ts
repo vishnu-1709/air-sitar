@@ -4,6 +4,8 @@ import { createHandTracker, LM, type Delegate } from './tracking';
 import { coverFit, toStage, type CoverFit } from './coords';
 import { HandSet, PINCH_ENTER, PINCH_EXIT, SMOOTH_BETA, SMOOTH_MIN_CUTOFF, type Hand, type Pt } from './hands';
 import { StringField, MAX_STRINGS, type Str } from './strings';
+import { Plucker } from './pluck';
+import { Synth, freqForLength } from './audio';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -14,6 +16,7 @@ const ctx      = canvas.getContext('2d')!;
 const debug    = document.getElementById('debug')!;
 
 let audioCtx: AudioContext | null = null;
+let synth: Synth | null = null;
 let landmarker: HandLandmarker | null = null;
 let delegate: Delegate = 'GPU';
 
@@ -37,6 +40,7 @@ startBtn.addEventListener('click', async () => {
   if (nav.audioSession) nav.audioSession.type = 'playback';
   audioCtx = new AudioContext({ latencyHint: 'interactive' });
   const resumed = audioCtx.resume();
+  synth = new Synth(audioCtx);
   blip(audioCtx);
 
   // --- Camera ---
@@ -77,6 +81,9 @@ const handSet = new HandSet();
 let hands: Hand[] = [];   // smoothed, stage-normalized, mirrored
 let rawHands: Pt[][] = []; // unsmoothed, for the comparison overlay
 const field = new StringField();
+const plucker = new Plucker();
+const flashes = new Map<number, { v: number; at: Pt }>(); // string id → pluck flash (1 → 0)
+let lastPluckInfo = '';
 let frames = 0;
 let fps = 0;
 let detectMs = 0;
@@ -117,6 +124,15 @@ function frame() {
   const holding = new Set(hands.filter((h) => field.isBusy(h.id)).map((h) => h.id));
   hands = handSet.update(dets, t0, fit.W / fit.H, holding);
   field.update(hands, fit.W / fit.H, t0);
+
+  // Plucks → sound
+  for (const ev of plucker.update(hands, field.strings, (id) => field.isBusy(id), t0, fit.W / fit.H)) {
+    const freq = freqForLength(field.length(ev.str));
+    const velocity = Math.min(1, (ev.speed - 0.15) / 2.5);
+    synth?.pluck(freq, velocity, ev.pos);
+    flashes.set(ev.str.id, { v: 0.4 + 0.6 * velocity, at: ev.at });
+    lastPluckInfo = `pluck: ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
+  }
 
   // 2. Draw
   drawVideo(fit);
@@ -174,7 +190,17 @@ function drawStrings(fit: CoverFit) {
 
   for (const str of field.strings) {
     const doomed = field.isHeld(str) && field.shouldDelete(str); // release now = delete
-    glowLine(str.a, str.b, fit, s, doomed ? RED : AMBER, doomed ? 0.5 : 1);
+    const fl = flashes.get(str.id);
+    glowLine(str.a, str.b, fit, s, doomed ? RED : AMBER, doomed ? 0.5 : 1 + (fl ? fl.v * 1.5 : 0));
+    if (fl) {
+      // small burst at the pluck point
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(${AMBER}, ${0.5 * fl.v})`;
+      dot(fl.at.x * fit.W, fl.at.y * fit.H, (6 + 18 * (1 - fl.v)) * s);
+      ctx.globalCompositeOperation = 'source-over';
+      fl.v *= 0.88;
+      if (fl.v < 0.02) flashes.delete(str.id);
+    }
     drawEndpoint(str, 'a', fit, s);
     drawEndpoint(str, 'b', fit, s);
   }
@@ -286,6 +312,7 @@ function updateDebug() {
   debug.textContent = [
     `pinch: enter < ${PINCH_ENTER}, exit > ${PINCH_EXIT}   smooth: mc ${SMOOTH_MIN_CUTOFF} b ${SMOOTH_BETA}`,
     `strings: ${field.strings.length}/${MAX_STRINGS}`,
+    lastPluckInfo,
     `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
     ...hands.map((h) =>
       `hand ${h.id}: ratio ${h.pinchRatio.toFixed(2)} ${h.pinching ? 'PINCH' : ''}${field.isBusy(h.id) ? ' HOLD' : ''}`),
