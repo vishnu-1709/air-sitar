@@ -6,7 +6,7 @@ import { HandSet, PINCH_ENTER, PINCH_EXIT, SMOOTH_BETA, SMOOTH_MIN_CUTOFF, type 
 import { StringField, MAX_STRINGS, type Str } from './strings';
 import { Plucker } from './pluck';
 import { Synth, freqForLength } from './audio';
-import { SCALES, freqToMidi, midiToFreq, snapWithHysteresis, swaraName } from './music';
+import { SCALES, DEFAULT_SCALE, freqToMidi, midiToFreq, snapWithHysteresis, noteName } from './music';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -102,7 +102,7 @@ let lastPluckInfo = '';
 //        note-to-note with a quick slide (like frets) → melodies are playable
 // glide: pitch follows length continuously → free meend between any pitches
 let mode: 'snap' | 'glide' = 'snap';
-let scaleIdx = 0;
+let scaleIdx = DEFAULT_SCALE;
 const notes = new Map<number, number>();   // string id → current pitch (MIDI, fractional in glide)
 const labels = new Map<number, { text: string; v: number }>(); // note name that fades after a pluck
 
@@ -174,7 +174,7 @@ function frame() {
   for (const ev of plucker.update(hands, field.strings, (id) => field.isBusy(id), t0, fit.W / fit.H)) {
     const m = pitches.get(ev.str.id)!;
     const freq = midiToFreq(m);
-    const name = swaraName(m, SCALES[scaleIdx]);
+    const name = noteName(m);
     labels.set(ev.str.id, { text: name, v: 1 });
     const velocity = Math.min(1, (ev.speed - 0.15) / 2.5);
     synth?.pluck(ev.str.id, freq, velocity, ev.pos);
@@ -239,7 +239,7 @@ function drawStrings(fit: CoverFit) {
   for (const str of field.strings) {
     const doomed = field.isHeld(str) && field.shouldDelete(str); // release now = delete
     const fl = flashes.get(str.id);
-    const col = pitchColor(notes.get(str.id) ?? 60);
+    const col = pitchColor(notes.get(str.id) ?? 48);
     glowLine(str.a, str.b, fit, s, doomed ? RED : col, doomed ? 0.5 : 1 + (fl ? fl.v * 1.5 : 0));
     drawLabel(str, fit, s);
     if (fl) {
@@ -269,11 +269,18 @@ function drawStrings(fit: CoverFit) {
   }
 }
 
-/** Low notes warm amber → high notes cool blue (interpolated over the range G2–C6) */
+/** Pitch colour over the range C2–C5: deep magenta → violet → cyan → near-white */
+const PALETTE: [number, number, number][] = [
+  [200, 30, 160],  // C2 deep magenta
+  [140, 60, 255],  // violet
+  [40, 200, 255],  // cyan
+  [210, 250, 255], // C5 near-white
+];
 function pitchColor(m: number): string {
-  const t = Math.min(1, Math.max(0, (m - 43) / (84 - 43)));
-  const lo = [255, 170, 70], hi = [110, 200, 255];
-  return lo.map((c, i) => Math.round(c + (hi[i] - c) * t)).join(', ');
+  const t = Math.min(1, Math.max(0, (m - 36) / 36)) * (PALETTE.length - 1);
+  const i = Math.min(PALETTE.length - 2, Math.floor(t));
+  const f = t - i;
+  return PALETTE[i].map((c, k) => Math.round(c + (PALETTE[i + 1][k] - c) * f)).join(', ');
 }
 
 /** Note name that pops up beside the string's midpoint and fades */
@@ -389,7 +396,7 @@ function updateDebug() {
   debug.textContent = [
     `pinch: enter < ${PINCH_ENTER}, exit > ${PINCH_EXIT}   smooth: mc ${SMOOTH_MIN_CUTOFF} b ${SMOOTH_BETA}`,
     `strings: ${field.strings.length}/${MAX_STRINGS}  ${mode} · ${SCALES[scaleIdx].name}  ` +
-      field.strings.map((x) => swaraName(notes.get(x.id) ?? 60, SCALES[scaleIdx])).join(' '),
+      field.strings.map((x) => noteName(notes.get(x.id) ?? 60)).join(' '),
     lastPluckInfo,
     `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
     ...hands.map((h) =>
