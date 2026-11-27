@@ -8,6 +8,7 @@ import { Plucker } from './pluck';
 import { Synth, freqForLength } from './audio';
 import { FX } from './fx';
 import { LaserFX, pitchColor, type View } from './visuals';
+import { BackgroundDimmer } from './segment';
 import { Groove } from './groove';
 import { SCALES, DEFAULT_SCALE, freqToMidi, midiToFreq, snapWithHysteresis, noteName } from './music';
 
@@ -31,6 +32,10 @@ const trackerReady = createHandTracker().then((t) => {
   delegate = t.delegate;
 });
 trackerReady.catch(() => {}); // error is shown on tap instead
+
+// Background dimming loads in parallel; if it fails we just use a uniform dim
+const dimmer = new BackgroundDimmer();
+dimmer.init().catch((e) => console.warn('Background dimming unavailable', e));
 
 startBtn.addEventListener('click', async () => {
   msg.textContent = '';
@@ -120,6 +125,11 @@ const controls = document.getElementById('controls')!;
 const modeBtn  = document.getElementById('modeBtn') as HTMLButtonElement;
 const scaleBtn = document.getElementById('scaleBtn') as HTMLButtonElement;
 const beatBtn  = document.getElementById('beatBtn') as HTMLButtonElement;
+const dimBtn   = document.getElementById('dimBtn') as HTMLButtonElement;
+dimBtn.onclick = () => {
+  dimmer.enabled = !dimmer.enabled;
+  dimBtn.textContent = dimmer.enabled ? 'BG dim ●' : 'BG dim ○';
+};
 beatBtn.onclick = () => {
   groove?.toggle();
   beatBtn.textContent = groove?.playing ? 'Beat ■' : 'Beat ▶';
@@ -176,6 +186,7 @@ function frame() {
     world: result.worldLandmarks[i],
   }));
   rawHands = dets.map((d) => d.pts);
+  dimmer.update(video, t0);
   const holding = new Set(hands.filter((h) => field.isBusy(h.id)).map((h) => h.id));
   hands = handSet.update(dets, t0, fit.W / fit.H, holding);
   field.update(hands, fit.W / fit.H, t0);
@@ -245,12 +256,10 @@ function drawVideo(fit: CoverFit) {
   ctx.scale(-1, 1); // mirror
   ctx.drawImage(video, fit.ox, fit.oy, fit.dw, fit.dh);
   ctx.restore();
-  // darken the camera so the lasers pop (Phase 10: segmentation keeps you brighter than the room)
-  ctx.fillStyle = `rgba(4, 2, 12, ${CAMERA_DIM})`;
-  ctx.fillRect(0, 0, fit.W, fit.H);
+  // darken the room so the lasers pop, keep you brighter (segmentation)
+  dimmer.draw(ctx, fit);
 }
 
-const CAMERA_DIM = 0.55;
 const view = (fit: CoverFit): View => ({ W: fit.W, H: fit.H, s: fit.H / 720 });
 
 // Press "r" on the laptop to overlay the raw (unsmoothed) points in red
@@ -379,7 +388,7 @@ function updateDebug() {
     `strings: ${field.strings.length}/${MAX_STRINGS}  ${mode} · ${SCALES[scaleIdx].name}  ` +
       field.strings.map((x) => noteName(notes.get(x.id) ?? 60)).join(' '),
     lastPluckInfo,
-    `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
+    `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})   seg: ${dimmer.ready ? dimmer.ms.toFixed(1) + ' ms' : 'off'}`,
     ...hands.map((h) =>
       `hand ${h.id}: ratio ${h.pinchRatio.toFixed(2)} ${h.pinching ? 'PINCH' : ''}${field.isBusy(h.id) ? ' HOLD' : ''}`),
     `camera: ${video.videoWidth}x${video.videoHeight}`,
