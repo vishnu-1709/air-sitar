@@ -1,7 +1,8 @@
 import './style.css';
-import type { HandLandmarker, NormalizedLandmark } from '@mediapipe/tasks-vision';
-import { createHandTracker, FINGERTIPS, type Delegate } from './tracking';
+import { HandLandmarker } from '@mediapipe/tasks-vision';
+import { createHandTracker, type Delegate } from './tracking';
 import { coverFit, toStage, type CoverFit } from './coords';
+import { HandSet, type Hand, type Pt } from './hands';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -71,7 +72,9 @@ startBtn.addEventListener('click', async () => {
 // Main loop: one hand-tracking pass per new camera frame
 // ---------------------------------------------------------------------------
 
-let hands: { x: number; y: number }[][] = []; // stage-normalized, mirrored
+const handSet = new HandSet();
+let hands: Hand[] = [];   // smoothed, stage-normalized, mirrored
+let rawHands: Pt[][] = []; // unsmoothed, for the comparison overlay
 let frames = 0;
 let fps = 0;
 let detectMs = 0;
@@ -104,9 +107,12 @@ function frame() {
   const t0 = performance.now();
   const result = landmarker!.detectForVideo(video, t0);
   detectMs = detectMs * 0.9 + (performance.now() - t0) * 0.1; // smoothed
-  hands = result.landmarks.map((lms: NormalizedLandmark[]) =>
-    lms.map((p) => toStage(fit, p.x, p.y)),
-  );
+  const dets = result.landmarks.map((lms, i) => ({
+    pts: lms.map((p) => toStage(fit, p.x, p.y)),
+    world: result.worldLandmarks[i],
+  }));
+  rawHands = dets.map((d) => d.pts);
+  hands = handSet.update(dets, t0, fit.W / fit.H);
 
   // 2. Draw
   drawVideo(fit);
@@ -148,32 +154,57 @@ function drawVideo(fit: CoverFit) {
   ctx.restore();
 }
 
-// Press "d" on the laptop to show the raw joints (debug)
-let showJoints = false;
-window.addEventListener('keydown', (e) => { if (e.key === 'd') showJoints = !showJoints; });
+// Press "r" on the laptop to overlay the raw (unsmoothed) points in red
+let showRaw = false;
+window.addEventListener('keydown', (e) => { if (e.key === 'r') showRaw = !showRaw; });
 
-const GLOW = '255, 179, 71'; // warm amber (r, g, b)
+const BONES = HandLandmarker.HAND_CONNECTIONS;
 
 function drawHands(fit: CoverFit) {
   const s = fit.H / 720; // scale sizes with resolution
-  ctx.globalCompositeOperation = 'lighter'; // overlapping light adds up, like real glow
 
-  for (const pts of hands) {
-    if (showJoints) {
-      ctx.fillStyle = `rgba(${GLOW}, 0.3)`;
-      for (const p of pts) dot(p.x * fit.W, p.y * fit.H, 2.5 * s);
-    }
-    for (const i of FINGERTIPS) glow(pts[i].x * fit.W, pts[i].y * fit.H, 6 * s);
+  if (showRaw) {
+    for (const pts of rawHands) drawSkeleton(pts, fit, s, 'rgba(255,80,80,0.8)');
   }
-  ctx.globalCompositeOperation = 'source-over';
+
+  for (const h of hands) {
+    drawSkeleton(h.pts, fit, s, '#fff');
+
+    // debug: ring at the grab point while pinching
+    if (h.pinching) {
+      ctx.strokeStyle = '#ffb347';
+      ctx.lineWidth = 2 * s;
+      ctx.beginPath();
+      ctx.arc(h.pinchPoint.x * fit.W, h.pinchPoint.y * fit.H, 12 * s, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
 }
 
-/** Soft glow from layered circles with falling alpha (cheap; no shadowBlur) */
-function glow(x: number, y: number, r: number) {
-  const layers: [number, number][] = [ [4, 0.05], [2.6, 0.1], [1.6, 0.22], [1, 0.9] ];
-  for (const [k, a] of layers) {
-    ctx.fillStyle = `rgba(${GLOW}, ${a})`;
-    dot(x, y, r * k);
+/** Thin white bones + small joint dots, with a faint dark edge so they read on bright backgrounds */
+function drawSkeleton(pts: Pt[], fit: CoverFit, s: number, color: string) {
+  ctx.lineCap = 'round';
+  const bones = () => {
+    ctx.beginPath();
+    for (const { start, end } of BONES) {
+      ctx.moveTo(pts[start].x * fit.W, pts[start].y * fit.H);
+      ctx.lineTo(pts[end].x * fit.W, pts[end].y * fit.H);
+    }
+    ctx.stroke();
+  };
+  // dark edge, then white on top
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 3.5 * s;
+  bones();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5 * s;
+  bones();
+
+  for (const p of pts) {
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    dot(p.x * fit.W, p.y * fit.H, 4 * s);
+    ctx.fillStyle = color;
+    dot(p.x * fit.W, p.y * fit.H, 2.8 * s);
   }
 }
 
@@ -187,7 +218,8 @@ function updateDebug() {
   const a = audioCtx!;
   debug.textContent = [
     `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
-    `hands: ${hands.length}`,
+    ...hands.map((h) =>
+      `hand ${h.id}: ratio ${h.pinchRatio.toFixed(2)} ${h.pinching ? 'PINCH' : ''}`),
     `camera: ${video.videoWidth}x${video.videoHeight}`,
     `audio: ${a.state}, ${a.sampleRate} Hz, base ${(a.baseLatency * 1000).toFixed(1)} ms`,
   ].join('\n');
