@@ -19,7 +19,8 @@ interface HandState {
   role: Role;
   wasPinching: boolean;
   pt: Pt;         // this hand's hold point
-  anchorOff: Pt | null; // pinch point relative to the knuckles, fixed at pinch start
+  anchorOff: Pt | null; // pinch point relative to the knuckles
+  minRatio: number;     // tightest pinch since this pinch started
   lastSeen: number;
 }
 
@@ -46,7 +47,7 @@ export class StringField {
       seen.add(h.id);
       let st = this.states.get(h.id);
       if (!st) {
-        st = { role: { kind: 'none' }, wasPinching: false, pt: h.pinchPoint, anchorOff: null, lastSeen: nowMs };
+        st = { role: { kind: 'none' }, wasPinching: false, pt: h.pinchPoint, anchorOff: null, minRatio: 1, lastSeen: nowMs };
         this.states.set(h.id, st);
       }
       st.lastSeen = nowMs;
@@ -55,7 +56,12 @@ export class StringField {
       // start to open, it switches to riding on the knuckles, which don't move
       // when you let go, so the release lands exactly where it was held.
       // At the switch both give the same point, so there's no jump either way.
-      const firm = h.pinchRatio < PINCH_ENTER;
+      //
+      // "Opening" is judged relative to how tight YOUR pinch was, not a fixed
+      // number: a relaxed pinch that never got below 0.4 still counts as firm.
+      if (h.pinching && !st.wasPinching) st.minRatio = h.pinchRatio;
+      st.minRatio = Math.min(st.minRatio, h.pinchRatio);
+      const firm = h.pinchRatio < Math.max(PINCH_ENTER + 0.05, st.minRatio + 0.12);
       if (h.pinching && (!st.wasPinching || firm)) {
         st.anchorOff = { x: h.pinchPoint.x - h.anchor.x, y: h.pinchPoint.y - h.anchor.y };
       }
@@ -90,6 +96,9 @@ export class StringField {
       const p = st.pt;
       if (st.role.kind === 'grab') {
         const { s, end, off } = st.role;
+        // the endpoint glides onto your fingers over ~0.1 s instead of keeping its offset
+        off.x *= 0.65;
+        off.y *= 0.65;
         s[end] = { x: p.x + off.x, y: p.y + off.y };
       } else if (st.role.kind === 'create' && id < st.role.partner) {
         const q = this.states.get(st.role.partner)!.pt;
