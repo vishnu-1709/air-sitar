@@ -58,6 +58,16 @@ startBtn.addEventListener('click', async () => {
     return;
   }
 
+  // --- String synth (AudioWorklet) ---
+  try {
+    await synth.init();
+  } catch (err) {
+    startBtn.disabled = false;
+    msg.textContent = 'Audio engine failed to load.';
+    console.error(err);
+    return;
+  }
+
   // --- Hand model ---
   try {
     msg.textContent = 'Loading hand model…';
@@ -125,11 +135,14 @@ function frame() {
   hands = handSet.update(dets, t0, fit.W / fit.H, holding);
   field.update(hands, fit.W / fit.H, t0);
 
+  // Every string's voice follows its current length (this is the live glide / meend)
+  synth?.sync(field.strings.map((str) => ({ id: str.id, freq: freqForLength(field.length(str)) })));
+
   // Plucks → sound
   for (const ev of plucker.update(hands, field.strings, (id) => field.isBusy(id), t0, fit.W / fit.H)) {
     const freq = freqForLength(field.length(ev.str));
     const velocity = Math.min(1, (ev.speed - 0.15) / 2.5);
-    synth?.pluck(freq, velocity, ev.pos);
+    synth?.pluck(ev.str.id, freq, velocity, ev.pos);
     flashes.set(ev.str.id, { v: 0.4 + 0.6 * velocity, at: ev.at });
     lastPluckInfo = `pluck: ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
   }
