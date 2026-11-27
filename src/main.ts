@@ -5,11 +5,11 @@ import { coverFit, toStage, type CoverFit } from './coords';
 import { HandSet, PINCH_ENTER, PINCH_EXIT, SMOOTH_BETA, SMOOTH_MIN_CUTOFF, type Hand, type Pt } from './hands';
 import { StringField, MAX_STRINGS, type Str } from './strings';
 import { Plucker } from './pluck';
-import { Synth, freqForLength } from './audio';
+import { Synth, freqForLength, K } from './audio';
 import { FX } from './fx';
-import { LaserFX, pitchColor, type View } from './visuals';
+import { LaserFX, FLAGS, pitchColor, type Flag, type View } from './visuals';
 import { Groove } from './groove';
-import { SCALES, DEFAULT_SCALE, freqToMidi, midiToFreq, snapWithHysteresis, noteName } from './music';
+import { SCALES, DEFAULT_SCALE, freqToMidi, midiToFreq, snapWithHysteresis, noteName, inScale } from './music';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -17,6 +17,10 @@ const msg      = document.getElementById('msg')!;
 const video    = document.getElementById('cam') as HTMLVideoElement;
 const canvas   = document.getElementById('view') as HTMLCanvasElement;
 const ctx      = canvas.getContext('2d')!;
+const fxCanvas = document.getElementById('fx') as HTMLCanvasElement;      // lasers (sharp)
+const fctx     = fxCanvas.getContext('2d')!;
+const bloomCanvas = document.getElementById('bloom') as HTMLCanvasElement; // lasers (blurred by CSS)
+const bctx     = bloomCanvas.getContext('2d')!;
 const debug    = document.getElementById('debug')!;
 
 let audioCtx: AudioContext | null = null;
@@ -114,7 +118,6 @@ let pluckCount = 0;
 let mode: 'snap' | 'glide' = 'snap';
 let scaleIdx = DEFAULT_SCALE;
 const notes = new Map<number, number>();   // string id → current pitch (MIDI, fractional in glide)
-const labels = new Map<number, { text: string; v: number }>(); // note name that fades after a pluck
 
 const controls = document.getElementById('controls')!;
 const modeBtn  = document.getElementById('modeBtn') as HTMLButtonElement;
@@ -139,12 +142,23 @@ function pitchFor(str: Str): number {
   notes.set(str.id, m);
   return m;
 }
-let frames = 0;
+let frames = 0;        // tracking frames (camera rate, ~30/s)
 let fps = 0;
+let rframes = 0;       // render frames (display rate, ~60/s)
+let rfps = 0;
 let detectMs = 0;
 let fpsT0 = performance.now();
 
+/**
+ * Two loops:
+ *  - tracking: once per new camera frame (~30/s): hands, strings, plucks, sound
+ *  - rendering: once per display frame (~60/s): everything you see
+ * so animations (dashes, pulses, sparks) stay smooth even though the camera is slower.
+ */
 function startLoop() {
+  const render = () => { draw(); requestAnimationFrame(render); };
+  requestAnimationFrame(render);
+
   const hasRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
   let lastVideoTime = -1;
 
@@ -154,7 +168,7 @@ function startLoop() {
       if (video.currentTime === lastVideoTime) { schedule(); return; }
       lastVideoTime = video.currentTime;
     }
-    frame();
+    track();
     schedule();
   };
   const schedule = () =>
@@ -163,7 +177,7 @@ function startLoop() {
   schedule();
 }
 
-function frame() {
+function track() {
   const fit = resizeCanvas();
   if (!fit) return;
 
@@ -190,33 +204,49 @@ function frame() {
     const m = pitches.get(ev.str.id)!;
     const freq = midiToFreq(m);
     const name = noteName(m);
-    labels.set(ev.str.id, { text: name, v: 1 });
     const velocity = Math.min(1, (ev.speed - 0.15) / 2.5);
     synth?.pluck(ev.str.id, freq, velocity, ev.pos);
     const sa = ev.str.a, sb = ev.str.b;
     const dl = Math.hypot(sb.x - sa.x, sb.y - sa.y) || 1;
     const bass = Math.min(1, Math.max(0, (60 - m) / 24));
-    laser.pluck(ev.str.id, ev.at, { x: (sb.x - sa.x) / dl, y: (sb.y - sa.y) / dl },
+    laser.pluck(ev.str.id, ev.pos, ev.at, { x: (sb.x - sa.x) / dl, y: (sb.y - sa.y) / dl },
       velocity, bass, pitchColor(m), t0);
     pluckCount++;
     lastPluckInfo = `pluck #${pluckCount}: ${name} ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
   }
 
-  // 2. Draw
-  const dt = Math.min(0.1, (t0 - lastFrameT) / 1000);
-  lastFrameT = t0;
-  laser.forget(new Set(field.strings.map((x) => x.id)));
-  drawVideo(fit);
-  drawHands(fit);      // hands under the lasers
-  drawStrings(fit, t0);
-  laser.drawSparks(ctx, view(fit), dt);
-
-  // 3. Stats
   frames++;
+}
+
+function draw() {
+  const fit = resizeCanvas();
+  if (!fit) return;
   const now = performance.now();
+  const dt = Math.min(0.1, (now - lastFrameT) / 1000);
+  lastFrameT = now;
+
+  // bottom layer: camera + hands
+  drawVideo(fit);
+  drawHands(fit);
+
+  // laser layer (transparent; CSS blends it over the camera with 'screen')
+  fctx.clearRect(0, 0, fit.W, fit.H);
+  laser.forget(new Set(field.strings.map((x) => x.id)));
+  drawStrings(fit, now, dt);
+  laser.drawParticles(fctx, view(fit), now, dt);
+
+  // bloom: half-res copy of the laser layer; CSS blurs it on the GPU
+  bloomCanvas.style.display = FLAGS.bloom ? '' : 'none';
+  if (FLAGS.bloom) {
+    bctx.clearRect(0, 0, bloomCanvas.width, bloomCanvas.height);
+    bctx.drawImage(fxCanvas, 0, 0, bloomCanvas.width, bloomCanvas.height);
+  }
+
+  rframes++;
   if (now - fpsT0 >= 500) {
     fps = (frames * 1000) / (now - fpsT0);
-    frames = 0;
+    rfps = (rframes * 1000) / (now - fpsT0);
+    frames = rframes = 0;
     fpsT0 = now;
     updateDebug();
   }
@@ -233,8 +263,10 @@ function resizeCanvas(): CoverFit | null {
   const H = Math.round(canvas.clientHeight * dpr);
   if (!W || !H || !video.videoWidth) return null;
   if (canvas.width !== W || canvas.height !== H) {
-    canvas.width = W;
-    canvas.height = H;
+    canvas.width = fxCanvas.width = W;
+    canvas.height = fxCanvas.height = H;
+    bloomCanvas.width = Math.round(W / 2);   // half res: blur hides it, and it's 4× cheaper
+    bloomCanvas.height = Math.round(H / 2);
   }
   return coverFit(video.videoWidth, video.videoHeight, W, H);
 }
@@ -261,52 +293,50 @@ const BONES = HandLandmarker.HAND_CONNECTIONS;
 
 const RED = '255, 60, 70';
 
-function drawStrings(fit: CoverFit, now: number) {
+// Fret ticks: the string length at which each semitone C2…C5 would sound (f = K / L)
+const FRET_MIDI = Array.from({ length: 37 }, (_, i) => 36 + i);
+const FRET_LEN = FRET_MIDI.map((m) => K / midiToFreq(m));
+
+function drawStrings(fit: CoverFit, now: number, dt: number) {
   const v = view(fit);
+  const aspect = fit.W / fit.H;
+  const scale = SCALES[scaleIdx];
+  const scaleFret = FRET_MIDI.map((m) => inScale(m, scale));
   for (const str of field.strings) {
     const doomed = field.isHeld(str) && field.shouldDelete(str); // release now = delete
-    const col = doomed ? RED : pitchColor(notes.get(str.id) ?? 48);
-    laser.drawString(ctx, v, str.id, str.a, str.b, col, now, doomed ? 0.5 : 1);
-    laser.drawEmitter(ctx, v, str.a, col, field.endpointState(str, 'a', hands));
-    laser.drawEmitter(ctx, v, str.b, col, field.endpointState(str, 'b', hands));
-    drawLabel(str, fit, v.s);
+    const m = notes.get(str.id) ?? 48;
+    const held = field.heldEnd(str);
+    laser.drawString(fctx, v, {
+      id: str.id, a: str.a, b: str.b, midi: m,
+      len: field.length(str),
+      anchor: held === 'a' ? 'b' : 'a',   // ticks measured from the end you're NOT moving
+      frets: FRET_LEN, scaleFret, doomed,
+    }, now, dt);
+    laser.drawEmitter(fctx, v, str.a, m, field.endpointState(str, 'a', hands), now, str.id, doomed);
+    laser.drawEmitter(fctx, v, str.b, m, field.endpointState(str, 'b', hands), now, str.id, doomed);
+
+    // note name beside the left-hand emitter, pushed outward along the string
+    const [p, q] = str.a.x <= str.b.x ? [str.a, str.b] : [str.b, str.a];
+    const ox = (p.x - q.x) * aspect, oy = p.y - q.y;
+    const ol = Math.hypot(ox, oy) || 1;
+    laser.drawLabel(fctx, v, p, { x: ox / ol, y: oy / ol }, noteName(m), str.id);
   }
 
   // preview while pulling a new string: dashed, in the colour of the note it will be
   const pv = field.preview;
   if (pv) {
-    const m = freqToMidi(freqForLength(Math.hypot((pv.b.x - pv.a.x) * fit.W / fit.H, pv.b.y - pv.a.y)));
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.setLineDash([10 * v.s, 8 * v.s]);
-    ctx.strokeStyle = pv.ok ? `rgba(${pitchColor(m)}, 0.85)` : `rgba(${RED}, 0.6)`;
-    ctx.lineWidth = 2 * v.s;
-    ctx.beginPath();
-    ctx.moveTo(pv.a.x * fit.W, pv.a.y * fit.H);
-    ctx.lineTo(pv.b.x * fit.W, pv.b.y * fit.H);
-    ctx.stroke();
-    ctx.restore();
+    const m = freqToMidi(freqForLength(Math.hypot((pv.b.x - pv.a.x) * aspect, pv.b.y - pv.a.y)));
+    fctx.save();
+    fctx.globalCompositeOperation = 'lighter';
+    fctx.setLineDash([10 * v.s, 8 * v.s]);
+    fctx.strokeStyle = pv.ok ? `rgba(${pitchColor(m)}, 0.85)` : `rgba(${RED}, 0.6)`;
+    fctx.lineWidth = 2 * v.s;
+    fctx.beginPath();
+    fctx.moveTo(pv.a.x * fit.W, pv.a.y * fit.H);
+    fctx.lineTo(pv.b.x * fit.W, pv.b.y * fit.H);
+    fctx.stroke();
+    fctx.restore();
   }
-}
-
-/** Note letter that fades in beside the string's midpoint after a pluck */
-function drawLabel(str: Str, fit: CoverFit, s: number) {
-  const lb = labels.get(str.id);
-  if (!lb) return;
-  const mx = ((str.a.x + str.b.x) / 2) * fit.W;
-  const my = ((str.a.y + str.b.y) / 2) * fit.H;
-  // offset perpendicular to the string, so the text doesn't sit on the beam
-  const dx = (str.b.x - str.a.x) * fit.W, dy = (str.b.y - str.a.y) * fit.H;
-  const len = Math.hypot(dx, dy) || 1;
-  let nx = -dy / len, ny = dx / len;
-  if (ny > 0) { nx = -nx; ny = -ny; } // always above
-  ctx.font = `300 ${Math.round(15 * s)}px ui-monospace, "SF Mono", Menlo, monospace`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = `rgba(230, 245, 255, ${0.8 * lb.v})`;
-  ctx.fillText(lb.text, mx + nx * 22 * s, my + ny * 22 * s);
-  lb.v *= 0.965;
-  if (lb.v < 0.02) labels.delete(str.id);
 }
 
 // "c" on the laptop clears all strings (proper button comes in Phase 12)
@@ -371,6 +401,24 @@ function dot(x: number, y: number, r: number) {
 let showDebug = new URLSearchParams(location.search).has('debug');
 window.addEventListener('keydown', (e) => { if (e.key === 'd') { showDebug = !showDebug; updateDebug(); } });
 
+// Effect toggles (performance testing): checkbox panel when ?debug, or ?off=bloom,frets
+const flagPanel = document.getElementById('flags')!;
+function buildFlagPanel() {
+  flagPanel.innerHTML = '';
+  flagPanel.style.display = showDebug ? '' : 'none';
+  for (const k of Object.keys(FLAGS) as Flag[]) {
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = FLAGS[k];
+    box.onchange = () => { FLAGS[k] = box.checked; };
+    label.append(box, ' ' + k);
+    flagPanel.append(label);
+  }
+}
+buildFlagPanel();
+window.addEventListener('keydown', (e) => { if (e.key === 'd') buildFlagPanel(); });
+
 function updateDebug() {
   if (!showDebug) { debug.textContent = ''; return; }
   const a = audioCtx!;
@@ -379,7 +427,7 @@ function updateDebug() {
     `strings: ${field.strings.length}/${MAX_STRINGS}  ${mode} · ${SCALES[scaleIdx].name}  ` +
       field.strings.map((x) => noteName(notes.get(x.id) ?? 60)).join(' '),
     lastPluckInfo,
-    `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
+    `render: ${rfps.toFixed(0)} fps   tracking: ${fps.toFixed(0)} fps   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
     ...hands.map((h) =>
       `hand ${h.id}: ratio ${h.pinchRatio.toFixed(2)} ${h.pinching ? 'PINCH' : ''}${field.isBusy(h.id) ? ' HOLD' : ''}`),
     `camera: ${video.videoWidth}x${video.videoHeight}`,

@@ -13,7 +13,7 @@
 
 // Pitch from length: f = K / L  (shorter = higher, like a real string).
 // L in stage heights. K chosen so L≈1.38 → C2 (65 Hz), L≈0.17 → C5 (523 Hz).
-const K = 90;
+export const K = 90;
 const F_MIN = 65.41;  // C2
 const F_MAX = 523.25; // C5
 

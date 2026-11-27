@@ -199,6 +199,11 @@ export class StringField {
     return 'idle';
   }
 
+  /** Which end is being held, if any */
+  heldEnd(s: Str): End | null {
+    return this.isGrabbed(s, 'a') ? 'a' : this.isGrabbed(s, 'b') ? 'b' : null;
+  }
+
   /** Strings that are being held (used to show the "will delete" warning) */
   isHeld(s: Str): boolean {
     return this.isGrabbed(s, 'a') || this.isGrabbed(s, 'b');

@@ -24,7 +24,7 @@ const ROOT_PC = NOTE_NAMES.indexOf(ROOT); // pitch class 0..11
 export const midiToFreq = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 export const freqToMidi = (f: number) => 69 + 12 * Math.log2(f / 440);
 
-function inScale(m: number, scale: Scale): boolean {
+export function inScale(m: number, scale: Scale): boolean {
   const pc = (((m - ROOT_PC) % 12) + 12) % 12;
   return scale.intervals.includes(pc);
 }
