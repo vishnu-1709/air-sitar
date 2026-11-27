@@ -1,9 +1,9 @@
-import { dist, type Hand, type Pt } from './hands';
+import { dist, LOST_MS, type Hand, type Pt } from './hands';
 
 // All lengths/radii in "stage heights" (aspect-corrected), see hands.ts dist()
 export const MAX_STRINGS = 6;
 export const MIN_LEN = 0.12;   // shorter than this → not created / deleted on release
-export const GRAB_R = 0.07;    // pinch this close to an endpoint to grab it
+export const GRAB_R = 0.11;    // pinch this close to an endpoint to grab it
 export const EDGE = 0.03;      // release an endpoint within this of the stage edge → delete
 const HIST = 4;                // frames of pinch history (see stablePoint)
 
@@ -20,6 +20,7 @@ interface HandState {
   role: Role;
   wasPinching: boolean;
   hist: Pt[];     // recent pinch points, newest last
+  lastSeen: number;
 }
 
 let nextId = 1;
@@ -33,9 +34,11 @@ export class StringField {
   preview: { a: Pt; b: Pt; ok: boolean } | null = null;
   private states = new Map<number, HandState>();
   private aspect = 16 / 9;
+  private now = 0;
 
-  update(hands: Hand[], aspect: number) {
+  update(hands: Hand[], aspect: number, nowMs: number) {
     this.aspect = aspect;
+    this.now = nowMs;
     const seen = new Set<number>();
 
     // 1. Events per visible hand
@@ -43,9 +46,10 @@ export class StringField {
       seen.add(h.id);
       let st = this.states.get(h.id);
       if (!st) {
-        st = { role: { kind: 'none' }, wasPinching: false, hist: [] };
+        st = { role: { kind: 'none' }, wasPinching: false, hist: [], lastSeen: nowMs };
         this.states.set(h.id, st);
       }
+      st.lastSeen = nowMs;
       st.hist.push(h.pinchPoint);
       if (st.hist.length > HIST) st.hist.shift();
 
@@ -54,9 +58,10 @@ export class StringField {
       st.wasPinching = h.pinching;
     }
 
-    // 2. Hands that vanished count as a release (e.g. dragged off-screen)
+    // 2. Hands gone for a while count as a release (e.g. dragged off-screen).
+    //    Short dropouts are ignored: the string just stays where it was.
     for (const [id, st] of this.states) {
-      if (seen.has(id)) continue;
+      if (seen.has(id) || nowMs - st.lastSeen < LOST_MS) continue;
       if (st.wasPinching) this.onRelease(st);
       this.states.delete(id);
     }
@@ -89,6 +94,12 @@ export class StringField {
   private onPinchStart(st: HandState, p: Pt) {
     const hit = this.nearestFreeEndpoint(p);
     if (hit) {
+      // take it over from a hand that lost tracking while holding it
+      for (const other of this.states.values()) {
+        if (other.role.kind === 'grab' && other.role.s === hit.s && other.role.end === hit.end) {
+          other.role = { kind: 'none' };
+        }
+      }
       const e = hit.s[hit.end];
       st.role = { kind: 'grab', s: hit.s, end: hit.end, off: { x: e.x - p.x, y: e.y - p.y } };
     } else {
@@ -136,9 +147,10 @@ export class StringField {
     this.strings = this.strings.filter((x) => x !== s);
   }
 
+  /** Held by a hand seen this frame (a hand that just lost tracking doesn't count) */
   private isGrabbed(s: Str, end: End): boolean {
     for (const st of this.states.values()) {
-      if (st.role.kind === 'grab' && st.role.s === s && st.role.end === end) return true;
+      if (st.lastSeen === this.now && st.role.kind === 'grab' && st.role.s === s && st.role.end === end) return true;
     }
     return false;
   }

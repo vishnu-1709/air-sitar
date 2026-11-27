@@ -1,6 +1,6 @@
 import './style.css';
 import { HandLandmarker } from '@mediapipe/tasks-vision';
-import { createHandTracker, type Delegate } from './tracking';
+import { createHandTracker, LM, type Delegate } from './tracking';
 import { coverFit, toStage, type CoverFit } from './coords';
 import { HandSet, PINCH_ENTER, PINCH_EXIT, type Hand, type Pt } from './hands';
 import { StringField, MAX_STRINGS, type Str } from './strings';
@@ -115,7 +115,7 @@ function frame() {
   }));
   rawHands = dets.map((d) => d.pts);
   hands = handSet.update(dets, t0, fit.W / fit.H);
-  field.update(hands, fit.W / fit.H);
+  field.update(hands, fit.W / fit.H, t0);
 
   // 2. Draw
   drawVideo(fit);
@@ -234,6 +234,16 @@ function drawHands(fit: CoverFit) {
 
   for (const h of hands) {
     drawSkeleton(h.pts, fit, s, '#fff');
+
+    // pinch feedback: thumb + index tips turn amber and grow
+    if (h.pinching) {
+      for (const i of [LM.THUMB_TIP, LM.INDEX_TIP]) {
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        dot(h.pts[i].x * fit.W, h.pts[i].y * fit.H, 7 * s);
+        ctx.fillStyle = '#ffb347';
+        dot(h.pts[i].x * fit.W, h.pts[i].y * fit.H, 5.5 * s);
+      }
+    }
   }
 }
 

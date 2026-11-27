@@ -12,14 +12,20 @@ const q = new URLSearchParams(location.search);
 export const PINCH_ENTER = Number(q.get('pe')) || 0.4;
 export const PINCH_EXIT = Number(q.get('px')) || 0.5;
 
-/** Keep a lost hand's filters this long, so a 1–2 frame dropout doesn't reset smoothing */
-const LOST_MS = 150;
+/** Keep a lost hand this long, so short tracking dropouts don't reset it */
+export const LOST_MS = 300;
+
+/** Pinch must hold its new state this many frames in a row before it counts (debounce) */
+const PINCH_ON_FRAMES = 2;
+const PINCH_OFF_FRAMES = 3;
 
 export interface Hand {
   id: number;            // stable id while the hand stays tracked
   pts: Pt[];             // 21 smoothed points, stage-normalized
   visible: boolean;      // seen this frame
-  pinching: boolean;
+  pinching: boolean;      // debounced state (use this)
+  rawPinch: boolean;      // after hysteresis, before debounce
+  pinchCount: number;     // frames rawPinch has disagreed with pinching
   pinchRatio: number;    // raw ratio, for debugging/tuning
   pinchPoint: Pt;        // midpoint of thumb & index tips (the "grab" point)
   lastSeen: number;
@@ -59,7 +65,7 @@ export class HandSet {
 
     const assigned = new Map<number, Hand>();
     for (const p of pairs) {
-      if (assigned.has(p.d) || !unmatched.has(p.h) || p.cost > 0.35) continue;
+      if (assigned.has(p.d) || !unmatched.has(p.h) || p.cost > 0.5) continue;
       assigned.set(p.d, p.h);
       unmatched.delete(p.h);
     }
@@ -80,6 +86,8 @@ export class HandSet {
       pts: [],
       visible: false,
       pinching: false,
+      rawPinch: false,
+      pinchCount: 0,
       pinchRatio: 1,
       pinchPoint: { x: 0, y: 0 },
       lastSeen: 0,
@@ -107,8 +115,19 @@ export class HandSet {
 
     // 3. Hysteresis: different thresholds for entering and leaving,
     //    so the state doesn't flicker when the ratio hovers near one value
-    if (!h.pinching && h.pinchRatio < PINCH_ENTER) h.pinching = true;
-    else if (h.pinching && h.pinchRatio > PINCH_EXIT) h.pinching = false;
+    if (!h.rawPinch && h.pinchRatio < PINCH_ENTER) h.rawPinch = true;
+    else if (h.rawPinch && h.pinchRatio > PINCH_EXIT) h.rawPinch = false;
+
+    // 4. Debounce: one noisy frame must not drop a string you're dragging
+    if (h.rawPinch !== h.pinching) {
+      h.pinchCount++;
+      if (h.pinchCount >= (h.rawPinch ? PINCH_ON_FRAMES : PINCH_OFF_FRAMES)) {
+        h.pinching = h.rawPinch;
+        h.pinchCount = 0;
+      }
+    } else {
+      h.pinchCount = 0;
+    }
 
     const a = h.pts[LM.THUMB_TIP];
     const b = h.pts[LM.INDEX_TIP];
