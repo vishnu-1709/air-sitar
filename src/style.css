@@ -20,12 +20,6 @@ body { display: grid; place-items: center; }
 #cam { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
 #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
-/* Laser layers: transparent canvases blended over the camera with 'screen'
-   (light adds, dark does nothing). #bloom is a half-res copy blurred on the GPU. */
-#fx, #bloom { position: absolute; inset: 0; width: 100%; height: 100%; display: block;
-  pointer-events: none; mix-blend-mode: screen; }
-#bloom { filter: blur(12px); opacity: .9; }
-
 /* Effect toggles (debug) */
 #flags { position: absolute; left: .5rem; top: .5rem; display: grid; grid-template-columns: repeat(2, auto);
   gap: .1rem .8rem; font: 11px/1.4 ui-monospace, monospace; background: rgba(0,0,0,.6);

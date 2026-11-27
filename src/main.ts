@@ -17,10 +17,18 @@ const msg      = document.getElementById('msg')!;
 const video    = document.getElementById('cam') as HTMLVideoElement;
 const canvas   = document.getElementById('view') as HTMLCanvasElement;
 const ctx      = canvas.getContext('2d')!;
-const fxCanvas = document.getElementById('fx') as HTMLCanvasElement;      // lasers (sharp)
+// Offscreen layers. Everything is composited into the one visible canvas (#view),
+// so what you see is exactly what the recorder captures.
+const fxCanvas = document.createElement('canvas');   // lasers, sharp, transparent
 const fctx     = fxCanvas.getContext('2d')!;
-const bloomCanvas = document.getElementById('bloom') as HTMLCanvasElement; // lasers (blurred by CSS)
-const bctx     = bloomCanvas.getContext('2d')!;
+// Bloom chain: the laser layer halved 3 times (½, ¼, ⅛). Each halving averages
+// 2×2 pixels, so the small copies are a proper blur; scaled back up they glow.
+const bloom = [2, 4, 8].map(() => {
+  const c = document.createElement('canvas');
+  return { c, x: c.getContext('2d')! };
+});
+const BLOOM_TIGHT = 0.55; // ¼-res copy: soft halo close to the beam
+const BLOOM_WIDE = 0.7;   // ⅛-res copy: wide glow
 const debug    = document.getElementById('debug')!;
 
 let audioCtx: AudioContext | null = null;
@@ -229,18 +237,34 @@ function draw() {
   drawVideo(fit);
   drawHands(fit);
 
-  // laser layer (transparent; CSS blends it over the camera with 'screen')
+  // laser layer (offscreen, transparent)
   fctx.clearRect(0, 0, fit.W, fit.H);
   laser.forget(new Set(field.strings.map((x) => x.id)));
   drawStrings(fit, now, dt);
   laser.drawParticles(fctx, view(fit), now, dt);
 
-  // bloom: half-res copy of the laser layer; CSS blurs it on the GPU
-  bloomCanvas.style.display = FLAGS.bloom ? '' : 'none';
+  // bloom: downsample chain
   if (FLAGS.bloom) {
-    bctx.clearRect(0, 0, bloomCanvas.width, bloomCanvas.height);
-    bctx.drawImage(fxCanvas, 0, 0, bloomCanvas.width, bloomCanvas.height);
+    let src: HTMLCanvasElement = fxCanvas;
+    for (const b of bloom) {
+      b.x.clearRect(0, 0, b.c.width, b.c.height);
+      b.x.drawImage(src, 0, 0, b.c.width, b.c.height);
+      src = b.c;
+    }
   }
+
+  // composite lasers + bloom over the camera with 'screen' (light adds, dark does nothing)
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(fxCanvas, 0, 0);
+  if (FLAGS.bloom) {
+    ctx.globalAlpha = BLOOM_TIGHT;
+    ctx.drawImage(bloom[1].c, 0, 0, fit.W, fit.H);
+    ctx.globalAlpha = BLOOM_WIDE;
+    ctx.drawImage(bloom[2].c, 0, 0, fit.W, fit.H);
+  }
+  ctx.restore();
 
   rframes++;
   if (now - fpsT0 >= 500) {
@@ -265,8 +289,10 @@ function resizeCanvas(): CoverFit | null {
   if (canvas.width !== W || canvas.height !== H) {
     canvas.width = fxCanvas.width = W;
     canvas.height = fxCanvas.height = H;
-    bloomCanvas.width = Math.round(W / 2);   // half res: blur hides it, and it's 4× cheaper
-    bloomCanvas.height = Math.round(H / 2);
+    [2, 4, 8].forEach((d, i) => {
+      bloom[i].c.width = Math.max(1, Math.round(W / d));
+      bloom[i].c.height = Math.max(1, Math.round(H / d));
+    });
   }
   return coverFit(video.videoWidth, video.videoHeight, W, H);
 }

@@ -3,10 +3,10 @@ import type { Pt } from './hands';
 /**
  * Laser string rendering.
  *
- * Canvas stack (index.html):
- *   #view  — camera + hands
- *   #fx    — lasers, sharp (transparent background, CSS mix-blend-mode: screen)
- *   #bloom — a half-res copy of #fx, CSS blur + screen → GPU bloom, nearly free
+ * Layers (main.ts): camera + hands on the visible canvas; lasers on an
+ * offscreen transparent canvas; a bloom made by halving the laser layer 3
+ * times; all composited into the visible canvas with 'screen' — so the
+ * recorder captures exactly what you see.
  *
  * Everything glowing is drawn with 'lighter' (additive): overlapping light adds
  * up toward white, like real light.
@@ -18,7 +18,7 @@ import type { Pt } from './hands';
 export interface View { W: number; H: number; s: number } // s = pixel scale (H / 720)
 
 export const FLAGS = {
-  bloom: true,     // CSS blur copy on top
+  bloom: true,     // blurred glow copy (downsample chain)
   glow: true,      // outer + inner glow strokes
   texture: true,   // wound/ribbed marks on low strings
   flow: true,      // light dashes travelling along strings
