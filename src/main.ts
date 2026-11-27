@@ -6,6 +6,7 @@ import { HandSet, PINCH_ENTER, PINCH_EXIT, SMOOTH_BETA, SMOOTH_MIN_CUTOFF, type 
 import { StringField, MAX_STRINGS, type Str } from './strings';
 import { Plucker } from './pluck';
 import { Synth, freqForLength } from './audio';
+import { SCALES, freqToMidi, midiToFreq, snapWithHysteresis, swaraName } from './music';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -80,6 +81,7 @@ startBtn.addEventListener('click', async () => {
   }
 
   startEl.classList.add('hidden');
+  controls.classList.remove('hidden');
   startLoop();
 });
 
@@ -94,6 +96,34 @@ const field = new StringField();
 const plucker = new Plucker();
 const flashes = new Map<number, { v: number; at: Pt }>(); // string id → pluck flash (1 → 0)
 let lastPluckInfo = '';
+
+// --- Pitch mode & scale -----------------------------------------------------
+// snap:  every string sits exactly on a note of the scale; dragging steps
+//        note-to-note with a quick slide (like frets) → melodies are playable
+// glide: pitch follows length continuously → free meend between any pitches
+let mode: 'snap' | 'glide' = 'snap';
+let scaleIdx = 0;
+const notes = new Map<number, number>();   // string id → current pitch (MIDI, fractional in glide)
+const labels = new Map<number, { text: string; v: number }>(); // note name that fades after a pluck
+
+const controls = document.getElementById('controls')!;
+const modeBtn  = document.getElementById('modeBtn') as HTMLButtonElement;
+const scaleBtn = document.getElementById('scaleBtn') as HTMLButtonElement;
+modeBtn.onclick = () => {
+  mode = mode === 'snap' ? 'glide' : 'snap';
+  modeBtn.textContent = mode === 'snap' ? 'Snap' : 'Glide';
+};
+scaleBtn.onclick = () => {
+  scaleIdx = (scaleIdx + 1) % SCALES.length;
+  scaleBtn.textContent = SCALES[scaleIdx].name;
+};
+
+function pitchFor(str: Str): number {
+  const raw = freqToMidi(freqForLength(field.length(str)));
+  const m = mode === 'snap' ? snapWithHysteresis(raw, notes.get(str.id), SCALES[scaleIdx]) : raw;
+  notes.set(str.id, m);
+  return m;
+}
 let frames = 0;
 let fps = 0;
 let detectMs = 0;
@@ -135,16 +165,21 @@ function frame() {
   hands = handSet.update(dets, t0, fit.W / fit.H, holding);
   field.update(hands, fit.W / fit.H, t0);
 
-  // Every string's voice follows its current length (this is the live glide / meend)
-  synth?.sync(field.strings.map((str) => ({ id: str.id, freq: freqForLength(field.length(str)) })));
+  // Every string's voice follows its current length (snapped or continuous)
+  const pitches = new Map(field.strings.map((str) => [str.id, pitchFor(str)]));
+  for (const id of notes.keys()) if (!pitches.has(id)) notes.delete(id);
+  synth?.sync(field.strings.map((str) => ({ id: str.id, freq: midiToFreq(pitches.get(str.id)!) })));
 
   // Plucks → sound
   for (const ev of plucker.update(hands, field.strings, (id) => field.isBusy(id), t0, fit.W / fit.H)) {
-    const freq = freqForLength(field.length(ev.str));
+    const m = pitches.get(ev.str.id)!;
+    const freq = midiToFreq(m);
+    const name = swaraName(m, SCALES[scaleIdx]);
+    labels.set(ev.str.id, { text: name, v: 1 });
     const velocity = Math.min(1, (ev.speed - 0.15) / 2.5);
     synth?.pluck(ev.str.id, freq, velocity, ev.pos);
     flashes.set(ev.str.id, { v: 0.4 + 0.6 * velocity, at: ev.at });
-    lastPluckInfo = `pluck: ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
+    lastPluckInfo = `pluck: ${name} ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
   }
 
   // 2. Draw
@@ -204,7 +239,9 @@ function drawStrings(fit: CoverFit) {
   for (const str of field.strings) {
     const doomed = field.isHeld(str) && field.shouldDelete(str); // release now = delete
     const fl = flashes.get(str.id);
-    glowLine(str.a, str.b, fit, s, doomed ? RED : AMBER, doomed ? 0.5 : 1 + (fl ? fl.v * 1.5 : 0));
+    const col = pitchColor(notes.get(str.id) ?? 60);
+    glowLine(str.a, str.b, fit, s, doomed ? RED : col, doomed ? 0.5 : 1 + (fl ? fl.v * 1.5 : 0));
+    drawLabel(str, fit, s);
     if (fl) {
       // small burst at the pluck point
       ctx.globalCompositeOperation = 'lighter';
@@ -230,6 +267,33 @@ function drawStrings(fit: CoverFit) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+}
+
+/** Low notes warm amber → high notes cool blue (interpolated over the range G2–C6) */
+function pitchColor(m: number): string {
+  const t = Math.min(1, Math.max(0, (m - 43) / (84 - 43)));
+  const lo = [255, 170, 70], hi = [110, 200, 255];
+  return lo.map((c, i) => Math.round(c + (hi[i] - c) * t)).join(', ');
+}
+
+/** Note name that pops up beside the string's midpoint and fades */
+function drawLabel(str: Str, fit: CoverFit, s: number) {
+  const lb = labels.get(str.id);
+  if (!lb) return;
+  const mx = ((str.a.x + str.b.x) / 2) * fit.W;
+  const my = ((str.a.y + str.b.y) / 2) * fit.H;
+  // offset perpendicular to the string, so the text doesn't sit on the line
+  const dx = (str.b.x - str.a.x) * fit.W, dy = (str.b.y - str.a.y) * fit.H;
+  const len = Math.hypot(dx, dy) || 1;
+  let nx = -dy / len, ny = dx / len;
+  if (ny > 0) { nx = -nx; ny = -ny; } // always above
+  ctx.font = `500 ${Math.round(20 * s)}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = `rgba(255, 240, 220, ${lb.v})`;
+  ctx.fillText(lb.text, mx + nx * 26 * s, my + ny * 26 * s);
+  lb.v *= 0.97;
+  if (lb.v < 0.02) labels.delete(str.id);
 }
 
 /** Glow from layered strokes, wide+faint to thin+bright (no shadowBlur) */
@@ -324,7 +388,8 @@ function updateDebug() {
   const a = audioCtx!;
   debug.textContent = [
     `pinch: enter < ${PINCH_ENTER}, exit > ${PINCH_EXIT}   smooth: mc ${SMOOTH_MIN_CUTOFF} b ${SMOOTH_BETA}`,
-    `strings: ${field.strings.length}/${MAX_STRINGS}`,
+    `strings: ${field.strings.length}/${MAX_STRINGS}  ${mode} · ${SCALES[scaleIdx].name}  ` +
+      field.strings.map((x) => swaraName(notes.get(x.id) ?? 60, SCALES[scaleIdx])).join(' '),
     lastPluckInfo,
     `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
     ...hands.map((h) =>
