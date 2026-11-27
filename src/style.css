@@ -44,5 +44,10 @@ button:disabled { opacity: .4; }
 /* Overlay controls (DOM, so they never appear in canvas recordings) */
 #controls { position: absolute; top: .6rem; right: .6rem; display: flex; gap: .4rem; }
 #controls.hidden { display: none; }
-#controls button { font-size: .8rem; padding: .4rem .9rem; background: rgba(11, 8, 6, .55);
-  border-color: rgba(255, 179, 71, .6); }
+#controls button, #controls select { font: inherit; font-size: .8rem; padding: .4rem .9rem;
+  background: rgba(11, 8, 6, .55); color: #ffb347; border: 1px solid rgba(255, 179, 71, .6);
+  border-radius: 999px; }
+#controls select { appearance: none; -webkit-appearance: none; padding-right: 1.6rem;
+  background-image: linear-gradient(45deg, transparent 50%, #ffb347 50%), linear-gradient(135deg, #ffb347 50%, transparent 50%);
+  background-position: calc(100% - 14px) 55%, calc(100% - 9px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }
+#controls select option { color: #000; }

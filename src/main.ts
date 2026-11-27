@@ -9,7 +9,7 @@ import { Synth, freqForLength, K } from './audio';
 import { FX } from './fx';
 import { LaserFX, FLAGS, pitchColor, type Flag, type View } from './visuals';
 import { Groove } from './groove';
-import { SCALES, DEFAULT_SCALE, freqToMidi, midiToFreq, snapWithHysteresis, noteName, inScale } from './music';
+import { SCALES, DEFAULT_SCALE, SONG_SPREAD, songSlotPitch, freqToMidi, midiToFreq, snapWithHysteresis, noteName, inScale } from './music';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
@@ -129,7 +129,7 @@ const notes = new Map<number, number>();   // string id → current pitch (MIDI,
 
 const controls = document.getElementById('controls')!;
 const modeBtn  = document.getElementById('modeBtn') as HTMLButtonElement;
-const scaleBtn = document.getElementById('scaleBtn') as HTMLButtonElement;
+const scaleSel = document.getElementById('scaleSel') as HTMLSelectElement;
 const beatBtn  = document.getElementById('beatBtn') as HTMLButtonElement;
 beatBtn.onclick = () => {
   groove?.toggle();
@@ -139,10 +139,9 @@ modeBtn.onclick = () => {
   mode = mode === 'snap' ? 'glide' : 'snap';
   modeBtn.textContent = mode === 'snap' ? 'Snap' : 'Glide';
 };
-scaleBtn.onclick = () => {
-  scaleIdx = (scaleIdx + 1) % SCALES.length;
-  scaleBtn.textContent = SCALES[scaleIdx].name;
-};
+// scale picker: filled from SCALES so new scales show up automatically
+SCALES.forEach((sc, i) => scaleSel.add(new Option(sc.name, String(i), i === scaleIdx, i === scaleIdx)));
+scaleSel.onchange = () => { scaleIdx = Number(scaleSel.value); };
 
 function pitchFor(str: Str): number {
   const raw = freqToMidi(freqForLength(field.length(str)));
@@ -327,7 +326,18 @@ function drawStrings(fit: CoverFit, now: number, dt: number) {
   const v = view(fit);
   const aspect = fit.W / fit.H;
   const scale = SCALES[scaleIdx];
-  const scaleFret = FRET_MIDI.map((m) => inScale(m, scale));
+  let frets = FRET_LEN;
+  let scaleFret = FRET_MIDI.map((m) => inScale(m, scale));
+  if (scale.kind === 'song' && SONG_SPREAD) {
+    // song notes sit at evenly spread positions, not their physical pitch lengths:
+    // show one tick per song note, and ticks halfway between (where it switches)
+    const n = scale.notes.length;
+    frets = []; scaleFret = [];
+    for (let i = 0; i < n; i++) {
+      frets.push(K / midiToFreq(songSlotPitch(i, n)));
+      scaleFret.push(true);
+    }
+  }
   for (const str of field.strings) {
     const doomed = field.isHeld(str) && field.shouldDelete(str); // release now = delete
     const m = notes.get(str.id) ?? 48;
@@ -336,7 +346,7 @@ function drawStrings(fit: CoverFit, now: number, dt: number) {
       id: str.id, a: str.a, b: str.b, midi: m,
       len: field.length(str),
       anchor: held === 'a' ? 'b' : 'a',   // ticks measured from the end you're NOT moving
-      frets: FRET_LEN, scaleFret, doomed,
+      frets, scaleFret, doomed,
     }, now, dt);
     laser.drawEmitter(fctx, v, str.a, m, field.endpointState(str, 'a', hands), now, str.id, doomed);
     laser.drawEmitter(fctx, v, str.b, m, field.endpointState(str, 'b', hands), now, str.id, doomed);
