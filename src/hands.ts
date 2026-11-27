@@ -12,6 +12,12 @@ const q = new URLSearchParams(location.search);
 export const PINCH_ENTER = Number(q.get('pe')) || 0.4;
 export const PINCH_EXIT = Number(q.get('px')) || 0.5;
 /** While holding a string, letting go needs a clearer finger opening (fast moves blur the fingers) */
+/**
+ * Smoothing (One Euro). Higher beta = less lag on fast moves (but a bit more jitter while moving).
+ * Tune via URL, e.g. ?b=40&mc=1.5
+ */
+export const SMOOTH_MIN_CUTOFF = Number(q.get('mc')) || 1.5;
+export const SMOOTH_BETA = Number(q.get('b')) || 25;
 export const PINCH_EXIT_HOLD = Number(q.get('ph')) || 0.6;
 
 /** Keep a lost hand this long, so short tracking dropouts don't reset it */
@@ -97,7 +103,7 @@ export class HandSet {
       pinchPoint: { x: 0, y: 0 },
       anchor: { x: 0, y: 0 },
       lastSeen: 0,
-      filters: Array.from({ length: 42 }, () => new OneEuro()),
+      filters: Array.from({ length: 42 }, () => new OneEuro(SMOOTH_MIN_CUTOFF, SMOOTH_BETA)),
     };
     this.hands.push(h);
     return h;

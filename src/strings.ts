@@ -1,4 +1,4 @@
-import { dist, LOST_MS, type Hand, type Pt } from './hands';
+import { dist, LOST_MS, PINCH_ENTER, type Hand, type Pt } from './hands';
 
 // All lengths/radii in "stage heights" (aspect-corrected), see hands.ts dist()
 export const MAX_STRINGS = 6;
@@ -50,10 +50,13 @@ export class StringField {
         this.states.set(h.id, st);
       }
       st.lastSeen = nowMs;
-      // While pinching, the hold point rides on the knuckles, not the fingertips.
-      // Opening the fingers to let go moves the fingertips, not the knuckles,
-      // so the string is released exactly where it was held: no jump.
-      if (h.pinching && !st.wasPinching) {
+      // Hold point: follows the fingertips while the pinch is firmly closed
+      // (so wrist flicks move the string at full speed). The moment the fingers
+      // start to open, it switches to riding on the knuckles, which don't move
+      // when you let go, so the release lands exactly where it was held.
+      // At the switch both give the same point, so there's no jump either way.
+      const firm = h.pinchRatio < PINCH_ENTER;
+      if (h.pinching && (!st.wasPinching || firm)) {
         st.anchorOff = { x: h.pinchPoint.x - h.anchor.x, y: h.pinchPoint.y - h.anchor.y };
       }
       st.pt = st.anchorOff

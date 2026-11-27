@@ -2,7 +2,7 @@ import './style.css';
 import { HandLandmarker } from '@mediapipe/tasks-vision';
 import { createHandTracker, LM, type Delegate } from './tracking';
 import { coverFit, toStage, type CoverFit } from './coords';
-import { HandSet, PINCH_ENTER, PINCH_EXIT, type Hand, type Pt } from './hands';
+import { HandSet, PINCH_ENTER, PINCH_EXIT, SMOOTH_BETA, SMOOTH_MIN_CUTOFF, type Hand, type Pt } from './hands';
 import { StringField, MAX_STRINGS, type Str } from './strings';
 
 const startEl  = document.getElementById('start')!;
@@ -284,7 +284,7 @@ function dot(x: number, y: number, r: number) {
 function updateDebug() {
   const a = audioCtx!;
   debug.textContent = [
-    `pinch: enter < ${PINCH_ENTER}, exit > ${PINCH_EXIT}`,
+    `pinch: enter < ${PINCH_ENTER}, exit > ${PINCH_EXIT}   smooth: mc ${SMOOTH_MIN_CUTOFF} b ${SMOOTH_BETA}`,
     `strings: ${field.strings.length}/${MAX_STRINGS}`,
     `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
     ...hands.map((h) =>
