@@ -4,9 +4,13 @@ import { LM } from './tracking';
 
 export interface Pt { x: number; y: number }
 
-/** Pinch thresholds on (thumb–index distance) / (hand size). Hysteresis: enter < ENTER, exit > EXIT */
-export const PINCH_ENTER = 0.25;
-export const PINCH_EXIT = 0.35;
+/**
+ * Pinch thresholds on (thumb–index distance) / (hand size). Hysteresis: enter < ENTER, exit > EXIT.
+ * Tune live without redeploying via URL, e.g.  ?pe=0.45&px=0.55
+ */
+const q = new URLSearchParams(location.search);
+export const PINCH_ENTER = Number(q.get('pe')) || 0.4;
+export const PINCH_EXIT = Number(q.get('px')) || 0.5;
 
 /** Keep a lost hand's filters this long, so a 1–2 frame dropout doesn't reset smoothing */
 const LOST_MS = 150;
