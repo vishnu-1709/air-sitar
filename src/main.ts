@@ -9,6 +9,7 @@ import { Synth, freqForLength, K } from './audio';
 import { FX } from './fx';
 import { LaserFX, FLAGS, degreeColor, type Flag, type View } from './visuals';
 import { Groove } from './groove';
+import { Recorder, saveVideo } from './recorder';
 import { SCALES, DEFAULT_SCALE, SONG_SPREAD, songSlotPitch, freqToMidi, midiToFreq, snapWithHysteresis, nearestInScale, noteName, inScale, degreeOf } from './music';
 
 const startEl  = document.getElementById('start')!;
@@ -34,6 +35,7 @@ const debug    = document.getElementById('debug')!;
 let audioCtx: AudioContext | null = null;
 let synth: Synth | null = null;
 let groove: Groove | null = null;
+let recorder: Recorder | null = null;
 let landmarker: HandLandmarker | null = null;
 let delegate: Delegate = 'GPU';
 
@@ -62,6 +64,7 @@ startBtn.addEventListener('click', async () => {
   fx.output.connect(audioCtx.destination);
   synth = new Synth(audioCtx, fx.input);
   groove = new Groove(audioCtx, fx.dry);
+  recorder = new Recorder(canvas, audioCtx, fx.output); // records what you see + hear
   blip(audioCtx);
 
   // --- Camera ---
@@ -131,6 +134,42 @@ const controls = document.getElementById('controls')!;
 const modeBtn  = document.getElementById('modeBtn') as HTMLButtonElement;
 const scaleSel = document.getElementById('scaleSel') as HTMLSelectElement;
 const beatBtn  = document.getElementById('beatBtn') as HTMLButtonElement;
+const recBtn   = document.getElementById('recBtn') as HTMLButtonElement;
+const savePanel = document.getElementById('savePanel')!;
+const saveBtn  = document.getElementById('saveBtn') as HTMLButtonElement;
+const discardBtn = document.getElementById('discardBtn') as HTMLButtonElement;
+const saveInfo = document.getElementById('saveInfo')!;
+let take: File | null = null;
+let recTimer: number | undefined;
+
+recBtn.onclick = async () => {
+  if (!recorder) return;
+  if (!recorder.supported) { alert('Recording is not supported in this browser.'); return; }
+  if (!recorder.recording) {
+    recorder.start();
+    recBtn.classList.add('rec');
+    const tick = () => {
+      const s = Math.floor((performance.now() - recorder!.startedAt) / 1000);
+      recBtn.textContent = `■ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    };
+    tick();
+    recTimer = window.setInterval(tick, 500);
+  } else {
+    window.clearInterval(recTimer);
+    recBtn.classList.remove('rec');
+    recBtn.textContent = '● Rec';
+    take = await recorder.stop();
+    saveInfo.textContent = `${(take.size / 1e6).toFixed(1)} MB · ${take.name.split('.').pop()!.toUpperCase()}`;
+    savePanel.classList.remove('hidden');
+  }
+};
+// Save needs its own tap: iOS only opens the share sheet during a user gesture
+saveBtn.onclick = async () => {
+  if (!take) return;
+  const r = await saveVideo(take);
+  if (r !== 'cancelled') { take = null; savePanel.classList.add('hidden'); }
+};
+discardBtn.onclick = () => { take = null; savePanel.classList.add('hidden'); };
 beatBtn.onclick = () => {
   groove?.toggle();
   beatBtn.textContent = groove?.playing ? 'Beat ■' : 'Beat ▶';
