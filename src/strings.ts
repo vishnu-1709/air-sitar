@@ -5,7 +5,6 @@ export const MAX_STRINGS = 6;
 export const MIN_LEN = 0.12;   // shorter than this → not created / deleted on release
 export const GRAB_R = 0.11;    // pinch this close to an endpoint to grab it
 export const EDGE = 0.03;      // release an endpoint within this of the stage edge → delete
-const HIST = 4;                // frames of pinch history (see stablePoint)
 
 export interface Str { id: number; a: Pt; b: Pt }
 type End = 'a' | 'b';
@@ -19,7 +18,7 @@ type Role =
 interface HandState {
   role: Role;
   wasPinching: boolean;
-  hist: Pt[];     // recent pinch points, newest last
+  pt: Pt;         // this hand's grab point (see Hand.grabPoint)
   lastSeen: number;
 }
 
@@ -46,14 +45,13 @@ export class StringField {
       seen.add(h.id);
       let st = this.states.get(h.id);
       if (!st) {
-        st = { role: { kind: 'none' }, wasPinching: false, hist: [], lastSeen: nowMs };
+        st = { role: { kind: 'none' }, wasPinching: false, pt: h.grabPoint, lastSeen: nowMs };
         this.states.set(h.id, st);
       }
       st.lastSeen = nowMs;
-      st.hist.push(h.pinchPoint);
-      if (st.hist.length > HIST) st.hist.shift();
+      st.pt = h.grabPoint;
 
-      if (h.pinching && !st.wasPinching) this.onPinchStart(st, h.pinchPoint);
+      if (h.pinching && !st.wasPinching) this.onPinchStart(st, h.grabPoint);
       else if (!h.pinching && st.wasPinching) this.onRelease(st);
       st.wasPinching = h.pinching;
     }
@@ -77,12 +75,12 @@ export class StringField {
     // 4. Continuous updates: dragged endpoints and the preview line
     this.preview = null;
     for (const [id, st] of this.states) {
-      const p = last(st.hist);
+      const p = st.pt;
       if (st.role.kind === 'grab') {
         const { s, end, off } = st.role;
         s[end] = { x: p.x + off.x, y: p.y + off.y };
       } else if (st.role.kind === 'create' && id < st.role.partner) {
-        const q = last(this.states.get(st.role.partner)!.hist);
+        const q = this.states.get(st.role.partner)!.pt;
         this.preview = {
           a: p, b: q,
           ok: this.strings.length < MAX_STRINGS && dist(p, q, aspect) >= MIN_LEN,
@@ -110,7 +108,7 @@ export class StringField {
   private onRelease(st: HandState) {
     const role = st.role;
     st.role = { kind: 'none' };
-    const p = stablePoint(st);
+    const p = st.pt;
 
     if (role.kind === 'grab') {
       const { s, end, off } = role;
@@ -119,7 +117,7 @@ export class StringField {
     } else if (role.kind === 'create') {
       const partner = this.states.get(role.partner);
       if (!partner) return;
-      const q = last(partner.hist);
+      const q = partner.pt;
       if (this.strings.length < MAX_STRINGS && dist(p, q, this.aspect) >= MIN_LEN) {
         // The string is born; the hand still pinching keeps holding its end,
         // so you can keep adjusting it without re-grabbing
@@ -173,7 +171,7 @@ export class StringField {
     if (this.isGrabbed(s, end)) return 'grabbed';
     for (const h of hands) {
       const st = this.states.get(h.id);
-      if (st && st.role.kind === 'none' && dist(h.pinchPoint, s[end], this.aspect) < GRAB_R) {
+      if (st && st.role.kind === 'none' && dist(h.grabPoint, s[end], this.aspect) < GRAB_R) {
         return 'hover';
       }
     }
@@ -195,16 +193,4 @@ export class StringField {
     this.strings = [];
     for (const st of this.states.values()) st.role = { kind: 'none' };
   }
-}
-
-function last<T>(a: T[]): T {
-  return a[a.length - 1];
-}
-
-/**
- * Opening your fingers to release moves the pinch point a little. Use the point
- * from a few frames ago (before the fingers opened) so the endpoint doesn't jump.
- */
-function stablePoint(st: HandState): Pt {
-  return st.hist[0] ?? { x: 0.5, y: 0.5 };
 }

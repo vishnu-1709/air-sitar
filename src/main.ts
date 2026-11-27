@@ -114,7 +114,8 @@ function frame() {
     world: result.worldLandmarks[i],
   }));
   rawHands = dets.map((d) => d.pts);
-  hands = handSet.update(dets, t0, fit.W / fit.H);
+  const holding = new Set(hands.filter((h) => field.isBusy(h.id)).map((h) => h.id));
+  hands = handSet.update(dets, t0, fit.W / fit.H, holding);
   field.update(hands, fit.W / fit.H, t0);
 
   // 2. Draw
@@ -287,7 +288,7 @@ function updateDebug() {
     `strings: ${field.strings.length}/${MAX_STRINGS}`,
     `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
     ...hands.map((h) =>
-      `hand ${h.id}: ratio ${h.pinchRatio.toFixed(2)} ${h.pinching ? 'PINCH' : ''}`),
+      `hand ${h.id}: ratio ${h.pinchRatio.toFixed(2)} ${h.pinching ? 'PINCH' : ''}${field.isBusy(h.id) ? ' HOLD' : ''}`),
     `camera: ${video.videoWidth}x${video.videoHeight}`,
     `audio: ${a.state}, ${a.sampleRate} Hz, base ${(a.baseLatency * 1000).toFixed(1)} ms`,
   ].join('\n');

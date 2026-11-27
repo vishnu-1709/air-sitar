@@ -11,13 +11,16 @@ export interface Pt { x: number; y: number }
 const q = new URLSearchParams(location.search);
 export const PINCH_ENTER = Number(q.get('pe')) || 0.4;
 export const PINCH_EXIT = Number(q.get('px')) || 0.5;
+/** While holding a string, letting go needs a clearer finger opening (fast moves blur the fingers) */
+export const PINCH_EXIT_HOLD = Number(q.get('ph')) || 0.65;
 
 /** Keep a lost hand this long, so short tracking dropouts don't reset it */
-export const LOST_MS = 300;
+export const LOST_MS = 400;
 
 /** Pinch must hold its new state this many frames in a row before it counts (debounce) */
 const PINCH_ON_FRAMES = 2;
 const PINCH_OFF_FRAMES = 3;
+const PINCH_OFF_FRAMES_HOLD = 5;
 
 export interface Hand {
   id: number;            // stable id while the hand stays tracked
@@ -27,7 +30,8 @@ export interface Hand {
   rawPinch: boolean;      // after hysteresis, before debounce
   pinchCount: number;     // frames rawPinch has disagreed with pinching
   pinchRatio: number;    // raw ratio, for debugging/tuning
-  pinchPoint: Pt;        // midpoint of thumb & index tips (the "grab" point)
+  pinchPoint: Pt;        // live midpoint of thumb & index tips
+  grabPoint: Pt;         // pinchPoint, frozen while the fingers are opening (no release jump)
   lastSeen: number;
   filters: OneEuro[];    // 21 × (x, y)
 }
@@ -49,7 +53,8 @@ export class HandSet {
   hands: Hand[] = [];
 
   /** aspect = stage width / height, so distances are measured in real proportions */
-  update(dets: Detection[], nowMs: number, aspect: number): Hand[] {
+  /** holding: ids of hands currently holding/creating a string (get a stickier pinch) */
+  update(dets: Detection[], nowMs: number, aspect: number, holding: Set<number>): Hand[] {
     const t = nowMs / 1000;
     const unmatched = new Set(this.hands);
     for (const h of this.hands) h.visible = false;
@@ -72,7 +77,7 @@ export class HandSet {
 
     dets.forEach((det, d) => {
       const h = assigned.get(d) ?? this.newHand();
-      this.applyDetection(h, det, t, nowMs);
+      this.applyDetection(h, det, t, nowMs, aspect, holding.has(h.id));
     });
 
     // Forget hands that have been gone too long
@@ -90,6 +95,7 @@ export class HandSet {
       pinchCount: 0,
       pinchRatio: 1,
       pinchPoint: { x: 0, y: 0 },
+      grabPoint: { x: 0, y: 0 },
       lastSeen: 0,
       filters: Array.from({ length: 42 }, () => new OneEuro()),
     };
@@ -97,7 +103,7 @@ export class HandSet {
     return h;
   }
 
-  private applyDetection(h: Hand, det: Detection, t: number, nowMs: number) {
+  private applyDetection(h: Hand, det: Detection, t: number, nowMs: number, aspect: number, holding: boolean) {
     // 1. Smooth every point
     h.pts = det.pts.map((p, i) => ({
       x: h.filters[i * 2].filter(p.x, t),
@@ -106,22 +112,29 @@ export class HandSet {
     h.visible = true;
     h.lastSeen = nowMs;
 
-    // 2. Pinch ratio from 3D world landmarks: independent of distance to camera
-    //    and of hand rotation (a 2D measurement shrinks when the hand tilts)
+    // 2. Pinch ratio, measured two ways; take the smaller.
+    //    3D (world landmarks) handles hand rotation, but its depth guess is noisy
+    //    and can make a real pinch look open. 2D (screen) has no depth noise.
+    //    Either one saying "closed" is good evidence.
     const w = det.world;
-    const pinchDist = dist3(w[LM.THUMB_TIP], w[LM.INDEX_TIP]);
-    const handSize = dist3(w[LM.WRIST], w[LM.MIDDLE_MCP]);
-    h.pinchRatio = pinchDist / Math.max(handSize, 1e-6);
+    const r3 = dist3(w[LM.THUMB_TIP], w[LM.INDEX_TIP]) /
+      Math.max(dist3(w[LM.WRIST], w[LM.MIDDLE_MCP]), 1e-6);
+    const P = h.pts;
+    const r2 = dist(P[LM.THUMB_TIP], P[LM.INDEX_TIP], aspect) /
+      Math.max(dist(P[LM.WRIST], P[LM.MIDDLE_MCP], aspect), 1e-6);
+    h.pinchRatio = Math.min(r2, r3);
+    const exit = holding ? PINCH_EXIT_HOLD : PINCH_EXIT;
 
     // 3. Hysteresis: different thresholds for entering and leaving,
     //    so the state doesn't flicker when the ratio hovers near one value
     if (!h.rawPinch && h.pinchRatio < PINCH_ENTER) h.rawPinch = true;
-    else if (h.rawPinch && h.pinchRatio > PINCH_EXIT) h.rawPinch = false;
+    else if (h.rawPinch && h.pinchRatio > exit) h.rawPinch = false;
 
     // 4. Debounce: one noisy frame must not drop a string you're dragging
     if (h.rawPinch !== h.pinching) {
       h.pinchCount++;
-      if (h.pinchCount >= (h.rawPinch ? PINCH_ON_FRAMES : PINCH_OFF_FRAMES)) {
+      const offFrames = holding ? PINCH_OFF_FRAMES_HOLD : PINCH_OFF_FRAMES;
+      if (h.pinchCount >= (h.rawPinch ? PINCH_ON_FRAMES : offFrames)) {
         h.pinching = h.rawPinch;
         h.pinchCount = 0;
       }
@@ -132,6 +145,9 @@ export class HandSet {
     const a = h.pts[LM.THUMB_TIP];
     const b = h.pts[LM.INDEX_TIP];
     h.pinchPoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    // Fingers closed → grab point tracks the pinch. Fingers opening → freeze it,
+    // so the endpoint doesn't drift during the debounce frames before release.
+    if (h.rawPinch || !h.pinching) h.grabPoint = h.pinchPoint;
   }
 }
 
