@@ -13,10 +13,13 @@ export const BPM = 100;                   // the beat and the delay share this t
 export const EIGHTH = 60 / BPM / 2;       // seconds per 1/8 note (0.3 s at 100 BPM)
 
 // ---- Mix knobs ----------------------------------------------------------------
-const DELAY_SEND = 0.32;
-const DELAY_FEEDBACK = 0.45;   // how many echoes (0.45 ≈ 5–6 audible repeats)
-const REVERB_SEND = 0.28;
-const REVERB_SECONDS = 2.6;
+// Tune live via URL, e.g. ?echo=0.1&fb=0.2&verb=0.1  (0 turns one off)
+const q = new URLSearchParams(location.search);
+const num = (k: string, d: number) => (q.has(k) ? Number(q.get(k)) : d);
+const DELAY_SEND = num('echo', 0.16);    // echo loudness
+const DELAY_FEEDBACK = num('fb', 0.28);  // how many echoes (0.28 ≈ 2–3 audible repeats)
+const REVERB_SEND = num('verb', 0.12);   // room/space loudness
+const REVERB_SECONDS = 1.6;
 // --------------------------------------------------------------------------------
 
 export class FX {
