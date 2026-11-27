@@ -14,8 +14,11 @@ body { display: grid; place-items: center; }
   background: #0b0806; color: #ffb347; letter-spacing: .1em; }
 @media (orientation: portrait) { #rotate { display: grid; } }
 
-#cam { position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; transform: scaleX(-1); } /* mirror */
+/* The video is only a source; the canvas draws it (mirrored) so recordings
+   capture exactly what you see. Opacity 0, not display:none — iOS may pause
+   hidden videos. */
+#cam { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
 .overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 1.25rem; padding: 2rem;

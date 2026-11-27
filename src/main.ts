@@ -1,12 +1,26 @@
 import './style.css';
+import type { HandLandmarker, NormalizedLandmark } from '@mediapipe/tasks-vision';
+import { createHandTracker, FINGERTIPS, LM, type Delegate } from './tracking';
+import { coverFit, toStage, type CoverFit } from './coords';
 
 const startEl  = document.getElementById('start')!;
 const startBtn = document.getElementById('startBtn') as HTMLButtonElement;
 const msg      = document.getElementById('msg')!;
 const video    = document.getElementById('cam') as HTMLVideoElement;
+const canvas   = document.getElementById('view') as HTMLCanvasElement;
+const ctx      = canvas.getContext('2d')!;
 const debug    = document.getElementById('debug')!;
 
 let audioCtx: AudioContext | null = null;
+let landmarker: HandLandmarker | null = null;
+let delegate: Delegate = 'GPU';
+
+// Start downloading the hand model immediately, so the tap feels fast
+const trackerReady = createHandTracker().then((t) => {
+  landmarker = t.landmarker;
+  delegate = t.delegate;
+});
+trackerReady.catch(() => {}); // error is shown on tap instead
 
 startBtn.addEventListener('click', async () => {
   msg.textContent = '';
@@ -17,13 +31,11 @@ startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
 
   // --- Audio: create + resume synchronously inside the tap (iOS rule) ---
-  // Lets audio play even with the iPhone silent switch on (Safari 16.4+)
   const nav = navigator as Navigator & { audioSession?: { type: string } };
   if (nav.audioSession) nav.audioSession.type = 'playback';
-
   audioCtx = new AudioContext({ latencyHint: 'interactive' });
   const resumed = audioCtx.resume();
-  blip(audioCtx); // audible proof that audio unlocked
+  blip(audioCtx);
 
   // --- Camera ---
   try {
@@ -34,35 +46,160 @@ startBtn.addEventListener('click', async () => {
     video.srcObject = stream;
     await video.play();
     await resumed;
-    startEl.classList.add('hidden');
-    showDebug();
   } catch (err) {
     startBtn.disabled = false;
     msg.textContent = cameraError(err);
+    return;
   }
+
+  // --- Hand model ---
+  try {
+    msg.textContent = 'Loading hand model…';
+    await trackerReady;
+  } catch (err) {
+    startBtn.disabled = false;
+    msg.textContent = 'Could not load hand model. Check your connection and reload.';
+    console.error(err);
+    return;
+  }
+
+  startEl.classList.add('hidden');
+  startLoop();
 });
 
-function blip(ctx: AudioContext) {
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
+// ---------------------------------------------------------------------------
+// Main loop: one hand-tracking pass per new camera frame
+// ---------------------------------------------------------------------------
+
+let hands: { x: number; y: number }[][] = []; // stage-normalized, mirrored
+let frames = 0;
+let fps = 0;
+let detectMs = 0;
+let fpsT0 = performance.now();
+
+function startLoop() {
+  const hasRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  let lastVideoTime = -1;
+
+  const step = () => {
+    // rAF fallback: skip if the camera hasn't produced a new frame yet
+    if (!hasRVFC) {
+      if (video.currentTime === lastVideoTime) { schedule(); return; }
+      lastVideoTime = video.currentTime;
+    }
+    frame();
+    schedule();
+  };
+  const schedule = () =>
+    hasRVFC ? video.requestVideoFrameCallback(step) : requestAnimationFrame(step);
+
+  schedule();
+}
+
+function frame() {
+  const fit = resizeCanvas();
+  if (!fit) return;
+
+  // 1. Track
+  const t0 = performance.now();
+  const result = landmarker!.detectForVideo(video, t0);
+  detectMs = detectMs * 0.9 + (performance.now() - t0) * 0.1; // smoothed
+  hands = result.landmarks.map((lms: NormalizedLandmark[]) =>
+    lms.map((p) => toStage(fit, p.x, p.y)),
+  );
+
+  // 2. Draw
+  drawVideo(fit);
+  drawHands(fit);
+
+  // 3. Stats
+  frames++;
+  const now = performance.now();
+  if (now - fpsT0 >= 500) {
+    fps = (frames * 1000) / (now - fpsT0);
+    frames = 0;
+    fpsT0 = now;
+    updateDebug();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+/** Keep the canvas backing store matched to its on-screen size × devicePixelRatio */
+function resizeCanvas(): CoverFit | null {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2); // cap at 2 for performance
+  const W = Math.round(canvas.clientWidth * dpr);
+  const H = Math.round(canvas.clientHeight * dpr);
+  if (!W || !H || !video.videoWidth) return null;
+  if (canvas.width !== W || canvas.height !== H) {
+    canvas.width = W;
+    canvas.height = H;
+  }
+  return coverFit(video.videoWidth, video.videoHeight, W, H);
+}
+
+function drawVideo(fit: CoverFit) {
+  ctx.save();
+  ctx.translate(fit.W, 0);
+  ctx.scale(-1, 1); // mirror
+  ctx.drawImage(video, fit.ox, fit.oy, fit.dw, fit.dh);
+  ctx.restore();
+}
+
+const HAND_COLORS = ['#ffb347', '#7fd4c1']; // debug only
+
+function drawHands(fit: CoverFit) {
+  const s = fit.H / 720; // scale dot sizes with resolution
+  hands.forEach((pts, h) => {
+    ctx.fillStyle = HAND_COLORS[h % 2];
+
+    // all 21 joints, faint
+    ctx.globalAlpha = 0.35;
+    for (const p of pts) dot(p.x * fit.W, p.y * fit.H, 3 * s);
+
+    // fingertips, bright; thumb + index bigger (they'll do the pinching)
+    ctx.globalAlpha = 1;
+    for (const i of FINGERTIPS) {
+      const r = i === LM.THUMB_TIP || i === LM.INDEX_TIP ? 9 : 5;
+      dot(pts[i].x * fit.W, pts[i].y * fit.H, r * s);
+    }
+  });
+  ctx.globalAlpha = 1;
+}
+
+function dot(x: number, y: number, r: number) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function updateDebug() {
+  const a = audioCtx!;
+  debug.textContent = [
+    `fps: ${fps.toFixed(0)}   detect: ${detectMs.toFixed(1)} ms (${delegate})`,
+    `hands: ${hands.length}`,
+    `camera: ${video.videoWidth}x${video.videoHeight}`,
+    `audio: ${a.state}, ${a.sampleRate} Hz, base ${(a.baseLatency * 1000).toFixed(1)} ms`,
+  ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function blip(a: AudioContext) {
+  const osc = a.createOscillator();
+  const gain = a.createGain();
   osc.frequency.value = 261.63; // Sa (C4)
-  const t = ctx.currentTime;
+  const t = a.currentTime;
   gain.gain.setValueAtTime(0.0001, t);
   gain.gain.exponentialRampToValueAtTime(0.3, t + 0.01);
   gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
-  osc.connect(gain).connect(ctx.destination);
+  osc.connect(gain).connect(a.destination);
   osc.start(t);
   osc.stop(t + 0.45);
-}
-
-function showDebug() {
-  const ctx = audioCtx!;
-  debug.textContent = [
-    `camera: ${video.videoWidth}x${video.videoHeight}`,
-    `audio: ${ctx.state}, ${ctx.sampleRate} Hz`,
-    `baseLatency: ${(ctx.baseLatency * 1000).toFixed(1)} ms`,
-    `outputLatency: ${((ctx.outputLatency ?? 0) * 1000).toFixed(1)} ms`,
-  ].join('\n');
 }
 
 function cameraError(err: unknown): string {
