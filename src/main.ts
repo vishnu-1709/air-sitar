@@ -105,6 +105,7 @@ const plucker = new Plucker();
 const laser = new LaserFX();
 let lastFrameT = performance.now();
 let lastPluckInfo = '';
+let pluckCount = 0;
 
 // --- Pitch mode & scale -----------------------------------------------------
 // snap:  every string sits exactly on a note of the scale; dragging steps
@@ -197,7 +198,8 @@ function frame() {
     const bass = Math.min(1, Math.max(0, (60 - m) / 24));
     laser.pluck(ev.str.id, ev.at, { x: (sb.x - sa.x) / dl, y: (sb.y - sa.y) / dl },
       velocity, bass, pitchColor(m), t0);
-    lastPluckInfo = `pluck: ${name} ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
+    pluckCount++;
+    lastPluckInfo = `pluck #${pluckCount}: ${name} ${freq.toFixed(0)} Hz  pos ${ev.pos.toFixed(2)}  speed ${ev.speed.toFixed(2)}  vel ${velocity.toFixed(2)}`;
   }
 
   // 2. Draw
