@@ -3,10 +3,16 @@ html, body { height: 100%; background: #000; color: #f3e6d0;
   font-family: system-ui, sans-serif; overflow: hidden; }
 body { display: grid; place-items: center; }
 
-/* Exact 9:16 box, as large as fits the screen */
+/* Exact 16:9 landscape box, as large as fits the screen */
 #stage { position: relative; overflow: hidden; background: #0b0806;
-  width: min(100vw, 100dvh * 9 / 16);
-  height: min(100dvh, 100vw * 16 / 9); }
+  width: min(100vw, 100dvh * 16 / 9);
+  height: min(100dvh, 100vw * 9 / 16); }
+
+/* Phone held upright: ask to rotate */
+#rotate { display: none; position: fixed; inset: 0; z-index: 10;
+  place-items: center; text-align: center; padding: 2rem;
+  background: #0b0806; color: #ffb347; letter-spacing: .1em; }
+@media (orientation: portrait) { #rotate { display: grid; } }
 
 #cam { position: absolute; inset: 0; width: 100%; height: 100%;
   object-fit: cover; transform: scaleX(-1); } /* mirror */
